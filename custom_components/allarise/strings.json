@@ -1,0 +1,60 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Allarise Alarm",
+        "description": "Configure your Allarise Alarm device.\n\nThe **Topic Prefix** and **Device Name** must match what is configured in the Allarise iOS app under **Settings → MQTT Settings**.\n\nFor setup instructions, visit [{docs_url}]({docs_url}).",
+        "data": {
+          "device_name": "Device Name",
+          "topic_prefix": "MQTT Topic Prefix"
+        },
+        "data_description": {
+          "device_name": "Must match the device name in the Allarise app's MQTT settings.",
+          "topic_prefix": "MQTT topic prefix (default: allarise). Must match the app's MQTT topic prefix."
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Allarise Alarm",
+        "description": "Update the Device Name or MQTT Topic Prefix.\n\nBoth values must match what is configured in the Allarise iOS app under **Settings → MQTT Settings**.\n\nThe integration will reload automatically after saving.",
+        "data": {
+          "device_name": "Device Name",
+          "topic_prefix": "MQTT Topic Prefix"
+        },
+        "data_description": {
+          "device_name": "Must match the device name in the Allarise app's MQTT settings.",
+          "topic_prefix": "MQTT topic prefix (default: allarise). Must match the app's MQTT topic prefix."
+        }
+      }
+    },
+    "error": {
+      "mqtt_not_configured": "MQTT integration is not configured. Please set up MQTT first."
+    },
+    "abort": {
+      "already_configured": "A device with this name is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Allarise Integration Info",
+        "description": "**Device:** {device_name}\n**MQTT Topic Prefix:** {topic_prefix}\n**Subscribing to:** `{mqtt_topic}`\n\n**Alarm zones:** {zones_summary}\n\nTo remove an orphaned zone, enable **Manage Zones** below.",
+        "data": {
+          "manage_zones": "Manage Zones"
+        },
+        "data_description": {
+          "manage_zones": "Open the zone management screen to remove unused zones."
+        }
+      },
+      "manage_zones": {
+        "title": "Manage Alarm Zones",
+        "description": "{zones_note}",
+        "data": {
+          "zones_to_remove": "Zones to Remove"
+        },
+        "data_description": {
+          "zones_to_remove": "Selected zones will be removed from Home Assistant and their retained MQTT message will be cleared."
+        }
+      }
+    }
+  }
+}

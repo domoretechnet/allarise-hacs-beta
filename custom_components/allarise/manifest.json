@@ -1,0 +1,17 @@
+{
+  "domain": "allarise",
+  "name": "Allarise Alarm (Beta)",
+  "codeowners": [
+    "@allarise"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "mqtt",
+    "media_source"
+  ],
+  "documentation": "https://beta.allarise.app/home-assistant.html",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "requirements": [],
+  "version": "3.0.0-beta.1"
+}
