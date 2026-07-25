@@ -75,6 +75,29 @@ reporting it as current:
 The app clears the retained values for these topics once, on its first connect
 after updating, so they disappear from the broker even if you stay on 2.x.
 
+**Fire times are now timestamp sensors.** `Fire Time` and `Snooze Fire Time`
+(both dashboard and per-alarm) carry `device_class: timestamp`, so Home
+Assistant's Time trigger can target them directly:
+
+```yaml
+triggers:
+  - trigger: time
+    at:
+      entity_id: sensor.allarise_iphone_alarm_1_fire_time
+      offset: "-00:05:00"   # negative = before the alarm
+```
+
+That replaces the old every-minute `time_pattern` + template-condition pattern
+with one scheduled callback that re-arms itself whenever the alarm moves.
+Previously this required hand-building a Template sensor helper with
+*Device class: Timestamp*; that helper is no longer needed.
+
+Two knock-on effects: these entities report `unknown` (not the string `none`)
+when nothing is scheduled, and Home Assistant stores them as datetimes. New
+`Fire Time (Display)` / `Snooze Fire Time (Display)` sensors carry the app's
+short-format text for anything that wants the old-style string. The
+`minutes_until` attribute is unchanged.
+
 **Entities added:** `missions` and `mission_count` (the full mission sequence —
 an alarm can require up to five), `tap_dismiss_mode` / `tap_count` /
 `tap_hold_duration`, and `morning_weather`, `dismiss_app_uri`, `snooze_app_uri`.

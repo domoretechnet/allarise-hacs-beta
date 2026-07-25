@@ -131,6 +131,13 @@ PER_ALARM_SENSORS = [
     # Both publish the literal string "None" when empty (they used to publish an
     # empty string), and "commands" is comma-separated with NO space after the
     # comma — templates that split on ", " need updating to split on ",".
+    # Human-readable siblings of the timestamp sensors. Fire Time / Snooze Fire
+    # Time are device_class timestamp so the Time trigger can target them, which
+    # means Home Assistant renders and stores them as datetimes. These plain
+    # strings keep the app's own short-format rendering available for dashboards
+    # and notification templates.
+    ("fire_time_display", "Fire Time (Display)", "mdi:calendar-clock", "None"),
+    ("snooze_fire_time_display", "Snooze Fire Time (Display)", "mdi:clock-alert", "None"),
     ("notes", "Notes", "mdi:note-text", "None"),
     ("sort_order", "Sort Order", "mdi:sort-numeric-ascending", "0"),
     ("commands", "Commands", "mdi:console", "None"),

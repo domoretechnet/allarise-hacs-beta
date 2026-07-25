@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -29,13 +29,34 @@ _FIRE_TIME_PER_ALARM_KEYS = frozenset({
 })
 
 
-def _minutes_until(iso_string: str) -> int | None:
-    """Return whole minutes from now until an ISO timestamp, or None if unparseable."""
-    parsed = dt_util.parse_datetime(iso_string)
+# Payloads the app sends when there is no time to report. A timestamp sensor
+# must be None (→ "unknown") in that case, not the literal string.
+_NO_VALUE = frozenset({"none", "unknown", "unavailable", ""})
+
+
+def _as_timestamp(raw: str | None) -> "datetime | None":
+    """Parse a fire-time payload into an aware datetime, or None when absent.
+
+    The app publishes these topics as ISO 8601 (with offset) and sends "none"
+    when there is nothing scheduled.
+    """
+    if raw is None or str(raw).strip().lower() in _NO_VALUE:
+        return None
+    parsed = dt_util.parse_datetime(str(raw))
     if parsed is None:
         return None
+    # A timestamp sensor's value must be timezone-aware. The app always sends an
+    # offset, but a naive value would otherwise raise inside HA.
     if parsed.tzinfo is None:
         parsed = dt_util.as_utc(parsed)
+    return parsed
+
+
+def _minutes_until(iso_string: str) -> int | None:
+    """Return whole minutes from now until an ISO timestamp, or None if unparseable."""
+    parsed = _as_timestamp(iso_string)
+    if parsed is None:
+        return None
     return round((parsed - dt_util.utcnow()).total_seconds() / 60)
 
 
@@ -90,6 +111,22 @@ class AllariseDashboardSensor(CoordinatorEntity[AllariseCoordinator], SensorEnti
         self._attr_name = name_suffix
         self._attr_icon = icon
         self._attr_unique_id = f"allarise_{coordinator.device_name}_{key}"
+        # Fire times are exposed as timestamp-class sensors so Home Assistant's
+        # Time trigger can target them directly:
+        #
+        #   triggers:
+        #     - trigger: time
+        #       at:
+        #         entity_id: sensor.<...>_fire_time
+        #         offset: "-00:05:00"
+        #
+        # That replaces the old every-minute time_pattern + template-condition
+        # pattern with a single scheduled callback, and it re-arms itself when
+        # the alarm moves. Without a device class the Time trigger will not
+        # accept the entity, which is why users were having to wrap it in a
+        # template-sensor helper by hand.
+        if key in _FIRE_TIME_DASHBOARD_KEYS:
+            self._attr_device_class = SensorDeviceClass.TIMESTAMP
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -107,9 +144,12 @@ class AllariseDashboardSensor(CoordinatorEntity[AllariseCoordinator], SensorEnti
         return self.coordinator.app_online
 
     @property
-    def native_value(self) -> str:
+    def native_value(self) -> str | datetime | None:
         """Return the sensor value."""
-        return self.coordinator.get_dashboard_state(self._key)
+        raw = self.coordinator.get_dashboard_state(self._key)
+        if self._key in _FIRE_TIME_DASHBOARD_KEYS:
+            return _as_timestamp(raw)
+        return raw
 
     @property
     def extra_state_attributes(self) -> dict[str, int] | None:
@@ -161,6 +201,10 @@ class AllarisePerAlarmSensor(CoordinatorEntity[AllariseCoordinator], SensorEntit
         self._attr_unique_id = (
             f"allarise_{coordinator.device_name}_alarm_{alarm_index}_{key}"
         )
+        # See the dashboard sensor above — timestamp class is what lets the Time
+        # trigger target this entity with an offset.
+        if key in _FIRE_TIME_PER_ALARM_KEYS:
+            self._attr_device_class = SensorDeviceClass.TIMESTAMP
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -186,9 +230,12 @@ class AllarisePerAlarmSensor(CoordinatorEntity[AllariseCoordinator], SensorEntit
         )
 
     @property
-    def native_value(self) -> str:
+    def native_value(self) -> str | datetime | None:
         """Return the sensor value."""
-        return self.coordinator.get_per_alarm_state(self._alarm_index, self._key)
+        raw = self.coordinator.get_per_alarm_state(self._alarm_index, self._key)
+        if self._key in _FIRE_TIME_PER_ALARM_KEYS:
+            return _as_timestamp(raw)
+        return raw
 
     @property
     def extra_state_attributes(self) -> dict[str, int] | None:
