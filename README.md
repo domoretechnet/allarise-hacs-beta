@@ -128,6 +128,15 @@ each alarm can carry a wake-up station.
 | `sensor.<device>_radio_station` | Current station name, or `none` |
 | `sensor.<device>_radio_stations_available` | JSON array of the device's favourited stations |
 | `button.<device>_radio_stop` / `_radio_pause` / `_radio_resume` | Transport controls |
+| `select.<device>_radio_station` | Pick a favourited station to start, or `none` to stop |
+
+**The Radio Station dropdown works exactly like the Sleep Sound one.** Its
+options come from `radio_stations_available`, so favourites added or removed in
+the app appear and disappear automatically. Picking a station publishes
+`radio_start`; picking `none` publishes `radio_stop`. Before the app's first
+publish arrives the dropdown offers only `none` — unlike sleep sounds there is
+no bundled set to fall back on, and inventing station names would just fail to
+resolve.
 
 `radio_stations_available` is what lets a dashboard build a station dropdown
 instead of hardcoding names — the same idea as `sleep_sounds_available`.
@@ -135,7 +144,9 @@ instead of hardcoding names — the same idea as `sleep_sounds_available`.
 **New per-alarm entity:** `sensor.<device>_alarm_<n>_radio_station` — that
 alarm's wake-up station, or `None`.
 
-**Starting playback** uses MQTT directly (there is no service for it yet):
+**Starting a favourited station** is a one-tap dropdown (above). Use MQTT
+directly when you need the options the dropdown can't express — a sleep timer,
+a volume, or an arbitrary stream URL:
 
 ```yaml
 service: mqtt.publish

@@ -93,6 +93,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._app_online = False
         # Sleep sound inventory — published by the app as a JSON array of MQTT names
         self._available_sleep_sounds: list[str] = []
+        self._available_radio_stations: list[str] = []
         # Zone arm states — keyed by zone_slug, auto-discovered from MQTT topics
         self._zone_arm_states: dict[str, bool] = {}
         self._known_zones: set[str] = set()
@@ -406,6 +407,16 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         state = self.get_dashboard_state("quick_alarm")
         return state not in ("none", "Unknown")
 
+    def get_available_radio_stations(self) -> list[str]:
+        """Return the favourited station names the app has advertised.
+
+        Empty until the app's first retained publish arrives. Same contract as
+        `get_available_sleep_sounds` — the radio select falls back to an empty
+        dropdown rather than inventing station names, because unlike sleep
+        sounds there is no fixed bundled set.
+        """
+        return list(self._available_radio_stations)
+
     def get_available_sleep_sounds(self) -> list[str]:
         """Return the list of MQTT names the app has advertised as available.
 
@@ -545,6 +556,19 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return
             if isinstance(parsed, list):
                 self._available_sleep_sounds = [str(s) for s in parsed]
+                self.async_set_updated_data(self._dashboard_states)
+            return
+
+        # Radio favourites — published as a JSON array of station names, the
+        # same shape as sleep_sounds_available. Drives the Radio Station select.
+        if key == "radio_stations_available":
+            try:
+                parsed = json.loads(payload) if payload else []
+            except json.JSONDecodeError:
+                _LOGGER.warning("Invalid radio_stations_available payload: %s", payload)
+                return
+            if isinstance(parsed, list):
+                self._available_radio_stations = [str(s) for s in parsed]
                 self.async_set_updated_data(self._dashboard_states)
             return
 
