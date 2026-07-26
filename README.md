@@ -115,6 +115,65 @@ an alarm can require up to five), `tap_dismiss_mode` / `tap_count` /
 now sets the first mission **and clears the rest** — use `missions` to set a
 multi-mission sequence.
 
+## 📻 Radio (beta.3)
+
+The app can now be driven as an internet-radio player from Home Assistant, and
+each alarm can carry a wake-up station.
+
+**New dashboard entities**
+
+| Entity | Value |
+| --- | --- |
+| `sensor.<device>_radio_state` | `playing` / `paused` / `stopped` |
+| `sensor.<device>_radio_station` | Current station name, or `none` |
+| `sensor.<device>_radio_stations_available` | JSON array of the device's favourited stations |
+| `button.<device>_radio_stop` / `_radio_pause` / `_radio_resume` | Transport controls |
+
+`radio_stations_available` is what lets a dashboard build a station dropdown
+instead of hardcoding names — the same idea as `sleep_sounds_available`.
+
+**New per-alarm entity:** `sensor.<device>_alarm_<n>_radio_station` — that
+alarm's wake-up station, or `None`.
+
+**Starting playback** uses MQTT directly (there is no service for it yet):
+
+```yaml
+service: mqtt.publish
+data:
+  topic: "hawake/<device>/command/radio_start"
+  payload: >
+    {"station": "WDET", "until_next_alarm": true,
+     "fade_out_minutes": 5, "ts": {{ now().timestamp() | int }}}
+```
+
+`station` takes a favourited station's name or UUID, or an object
+`{"url": "https://…", "name": "…"}` for any stream. `radio_start` is ignored
+while an alarm is ringing.
+
+**Per-alarm station** is set with the `radio_station` field on the Update Alarm
+service (or `create_alarm` over MQTT). Send `""` to clear it.
+
+## 🎯 Fallback missions (beta.3)
+
+A Home Assistant mission's fallback — what runs when the broker is unreachable —
+now accepts **Bricks** (`block_drop`) and **Meteor** (`meteor`) alongside
+`shake`, `math`, `balance_ball` and `none`.
+
+Every fallback type also takes the same settings its primary form does, passed
+through `mission_config`:
+
+```yaml
+mission: home_assistant
+mission_config:
+  fallback_mission: block_drop
+  fallback_block_drop_difficulty: hard
+  fallback_block_drop_lines: 8
+```
+
+Tap-as-fallback previously had no settings at all and was always a single tap;
+it now takes `fallback_tap_dismiss_mode`, `fallback_tap_count` and
+`fallback_tap_hold_duration`.
+
 ## 🔗 Links
 
 - [Allarise Beta (TestFlight)](https://testflight.apple.com/join/DYTMR1v2)

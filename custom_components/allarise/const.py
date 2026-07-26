@@ -96,6 +96,13 @@ DASHBOARD_SENSORS = [
     ("quick_alarm_count", "Quick Alarm Count", "mdi:counter", "0"),
     # ── Sleep Sounds ───────────────────────────────────────────────────
     ("sleep_sound_volume", "Sleep Volume", "mdi:volume-high", "0"),
+    # ── Radio ──────────────────────────────────────────────────────────
+    # The app publishes these on every transport transition, and the
+    # favourites list once on connect so a dashboard can build a dropdown
+    # instead of hardcoding station names.
+    ("radio_state", "Radio State", "mdi:radio", "stopped"),
+    ("radio_station", "Radio Station", "mdi:radio-tower", "none"),
+    ("radio_stations_available", "Radio Stations Available", "mdi:playlist-music", "[]"),
     # ── System Volume ──────────────────────────────────────────────────
     ("system_volume", "System Volume", "mdi:volume-high", "Unknown"),
     # ── Arm Widget Commands ────────────────────────────────────────────
@@ -139,6 +146,8 @@ PER_ALARM_SENSORS = [
     ("fire_time_display", "Fire Time (Display)", "mdi:calendar-clock", "None"),
     ("snooze_fire_time_display", "Snooze Fire Time (Display)", "mdi:clock-alert", "None"),
     ("notes", "Notes", "mdi:note-text", "None"),
+    # Wake-up radio station for this alarm — the station NAME, or "None".
+    ("radio_station", "Radio Station", "mdi:radio", "None"),
     ("sort_order", "Sort Order", "mdi:sort-numeric-ascending", "0"),
     ("commands", "Commands", "mdi:console", "None"),
     ("swipe_left_command", "Swipe Left Command", "mdi:gesture-swipe-left", "None"),
@@ -163,6 +172,9 @@ DASHBOARD_BUTTONS = [
     ("sleep_sound_stop", "Sleep Sound Stop", "mdi:stop"),
     ("sleep_sound_pause", "Sleep Sound Pause", "mdi:pause"),
     ("sleep_sound_resume", "Sleep Sound Resume", "mdi:play"),
+    ("radio_stop", "Radio Stop", "mdi:stop"),
+    ("radio_pause", "Radio Pause", "mdi:pause"),
+    ("radio_resume", "Radio Resume", "mdi:play"),
 ]
 
 # Quick alarm button definitions: (key, name_suffix, icon)

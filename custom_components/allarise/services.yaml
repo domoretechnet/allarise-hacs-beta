@@ -94,7 +94,13 @@ update_alarm:
       name: Mission Config
       description: >-
         Extra settings for the mission above, e.g. {"math_count": 3,
-        "math_difficulty": "hard"}. See the app's Inbound Commands Reference.
+        "math_difficulty": "hard"}. For a home_assistant mission this also
+        carries the fallback: fallback_mission now accepts block_drop and
+        meteor as well as shake/math/balance_ball/none, and every fallback
+        type takes the same settings its primary form does — e.g.
+        {"fallback_mission": "block_drop", "fallback_block_drop_lines": 8} or
+        {"fallback_mission": "none", "fallback_tap_count": 10}. See the app's
+        Inbound Commands Reference.
       selector:
         object:
     missions:
@@ -143,6 +149,14 @@ update_alarm:
     snooze_app_uri:
       name: Snooze App Link
       description: URL opened when this alarm is snoozed. Empty string clears it.
+      selector:
+        text:
+    radio_station:
+      name: Radio Station
+      description: >-
+        Wake-up radio station. A favourited station's name or UUID. Send an
+        empty string to clear it. (For an arbitrary stream URL, publish
+        radio_station as an object via MQTT directly.)
       selector:
         text:
     swipe_left_command:
