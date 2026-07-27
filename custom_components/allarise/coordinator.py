@@ -305,6 +305,48 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if new_entities:
                 async_add_entities(new_entities)
 
+    def _sync_alarm_device_name(self, alarm_index: int) -> None:
+        """Give the per-alarm device the alarm's own name once it is known.
+
+        The registry entry is created the instant `alarm/{n}/availability`
+        arrives, which is *before* `alarm/{n}/name` — so the entry lands with
+        the generic "Allarise {device} - Alarm {n}" fallback that every
+        entity's `device_info` computes when the name is still "Unknown", and
+        nothing ever revisited it. Result: the device page was titled "Alarm 2"
+        forever even though the app had published "Weekday Wake" seconds later.
+
+        Called for every per-alarm key, not just "name", because entities are
+        added asynchronously: a `name` that arrives mid-registration would
+        otherwise be overwritten by the generic `device_info` name and never
+        retried. Each call is an indexed registry lookup plus a string compare.
+
+        Renaming a device does NOT rewrite the entity_ids already generated
+        under the old name, so existing dashboards, automations and templates
+        keep working across the upgrade.
+        """
+        alarm_name = self.get_per_alarm_state(alarm_index, "name")
+        if alarm_name in ("Unknown", "", "None"):
+            return
+
+        device_reg = dr.async_get(self.hass)
+        device_entry = device_reg.async_get_device(
+            identifiers={(DOMAIN, f"allarise_{self.device_name}_alarm_{alarm_index}")}
+        )
+        if device_entry is None:
+            return
+        # A rename the user typed in Home Assistant is theirs to keep.
+        if device_entry.name_by_user:
+            return
+
+        display_name = f"Allarise {self.device_name} - {alarm_name}"
+        if device_entry.name == display_name:
+            return
+
+        device_reg.async_update_device(device_entry.id, name=display_name)
+        _LOGGER.debug(
+            "Renamed per-alarm device %d to %r", alarm_index, display_name
+        )
+
     def is_alarm_removed(self, alarm_index: int) -> bool:
         """Return True if the alarm has been deleted and its entities should stop updating."""
         return alarm_index in self._removed_alarm_indices
@@ -561,6 +603,11 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Radio favourites — published as a JSON array of station names, the
         # same shape as sleep_sounds_available. Drives the Radio Station select.
+        # Unlike sleep sounds this one ALSO has a dashboard sensor
+        # ("radio_stations_available"), so the list is written back into
+        # _dashboard_states as a JSON array — the same shape as its "[]"
+        # default — instead of the branch returning early and leaving the
+        # sensor stuck on that default forever.
         if key == "radio_stations_available":
             try:
                 parsed = json.loads(payload) if payload else []
@@ -569,6 +616,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return
             if isinstance(parsed, list):
                 self._available_radio_stations = [str(s) for s in parsed]
+                self._dashboard_states[key] = json.dumps(self._available_radio_stations)
                 self.async_set_updated_data(self._dashboard_states)
             return
 
@@ -745,6 +793,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.async_set_updated_data(self._dashboard_states)
                 return
 
+            self._sync_alarm_device_name(alarm_index)
             self.async_set_updated_data(self._dashboard_states)
 
     @callback

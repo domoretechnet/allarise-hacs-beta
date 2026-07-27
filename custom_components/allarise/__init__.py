@@ -68,6 +68,8 @@ SCHEMA_UPDATE_ALARM = vol.Schema(
         vol.Optional("morning_weather"): cv.boolean,
         vol.Optional("dismiss_app_uri"): cv.string,
         vol.Optional("snooze_app_uri"): cv.string,
+        # A favourited station's name or UUID; "" clears the wake-up station.
+        vol.Optional("radio_station"): cv.string,
         vol.Optional("swipe_left_command"): cv.string,
         vol.Optional("swipe_right_command"): cv.string,
     }

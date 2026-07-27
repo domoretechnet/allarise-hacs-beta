@@ -8,6 +8,7 @@
     "switch",
     "media_player",
     "number",
+    "select",
     "notify"
   ],
   "homeassistant": "2024.1.0",

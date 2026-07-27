@@ -167,11 +167,19 @@ class AllariseDashboardSensor(CoordinatorEntity[AllariseCoordinator], SensorEnti
         if self._key in _FIRE_TIME_DASHBOARD_KEYS:
             self.async_on_remove(
                 async_track_time_interval(
-                    self.hass,
-                    lambda _now: self.async_write_ha_state(),
-                    _MINUTES_UNTIL_REFRESH,
+                    self.hass, self._tick_minutes_until, _MINUTES_UNTIL_REFRESH
                 )
             )
+
+    @callback
+    def _tick_minutes_until(self, _now: datetime) -> None:
+        """Re-publish state so the minutes_until attribute counts down.
+
+        Must be a @callback: an undecorated function is treated as blocking
+        and run in an executor thread, and async_write_ha_state from off the
+        event loop raises every minute on modern Home Assistant.
+        """
+        self.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -255,11 +263,20 @@ class AllarisePerAlarmSensor(CoordinatorEntity[AllariseCoordinator], SensorEntit
         if self._key in _FIRE_TIME_PER_ALARM_KEYS:
             self.async_on_remove(
                 async_track_time_interval(
-                    self.hass,
-                    lambda _now: self.async_write_ha_state(),
-                    _MINUTES_UNTIL_REFRESH,
+                    self.hass, self._tick_minutes_until, _MINUTES_UNTIL_REFRESH
                 )
             )
+
+    @callback
+    def _tick_minutes_until(self, _now: datetime) -> None:
+        """Re-publish state so the minutes_until attribute counts down.
+
+        See the dashboard sensor's copy — the tick must be a @callback or it
+        runs off the event loop and raises once a minute.
+        """
+        if self.coordinator.is_alarm_removed(self._alarm_index):
+            return
+        self.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:

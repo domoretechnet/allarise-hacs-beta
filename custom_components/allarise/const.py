@@ -1,7 +1,7 @@
 """Constants for the Allarise Alarm integration."""
 
 DOMAIN = "allarise"
-PLATFORMS = ["sensor", "binary_sensor", "button", "switch", "media_player", "number", "select"]
+PLATFORMS = ["sensor", "binary_sensor", "button", "switch", "media_player", "number", "select", "notify"]
 
 # Config keys
 CONF_DEVICE_NAME = "device_name"
@@ -95,6 +95,12 @@ DASHBOARD_SENSORS = [
     ("quick_alarm_label", "Quick Alarm Label", "mdi:label", "none"),
     ("quick_alarm_count", "Quick Alarm Count", "mdi:counter", "0"),
     # ── Sleep Sounds ───────────────────────────────────────────────────
+    # The currently-playing sound name, mirroring the radio pair below
+    # (radio_state / radio_station). The Sleep Sound select already read this
+    # key via get_dashboard_state("sleep_sound"); it just had no sensor row, so
+    # the value was invisible on the device page while its radio twin was not.
+    # "none" when nothing is playing, which is exactly what the app publishes.
+    ("sleep_sound", "Sleep Sound", "mdi:music-note", "none"),
     ("sleep_sound_volume", "Sleep Volume", "mdi:volume-high", "0"),
     # ── Radio ──────────────────────────────────────────────────────────
     # The app publishes these on every transport transition, and the
@@ -179,8 +185,12 @@ DASHBOARD_BUTTONS = [
 
 # Quick alarm button definitions: (key, name_suffix, icon)
 # Quick alarms are one-time ephemeral alarms — only dismiss (when ringing) and delete are relevant.
+# The dismiss key stays "dismiss" — it is the dashboard command the app
+# listens for — but the display name must not collide with the dashboard
+# button of the same name, or the device page shows two "Dismiss Alarm" rows
+# and HA suffixes one entity_id with "_2".
 QUICK_ALARM_BUTTONS = [
-    ("dismiss", "Dismiss Alarm", "mdi:alarm-off"),
+    ("dismiss", "Dismiss Quick Alarm", "mdi:alarm-off"),
     ("delete_quick_alarm", "Delete Quick Alarm", "mdi:trash-can"),
 ]
 
