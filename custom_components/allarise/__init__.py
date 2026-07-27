@@ -34,6 +34,10 @@ SERVICE_TRIGGER_ALERT = "trigger_alert"
 SERVICE_DISMISS = "dismiss"
 SERVICE_SNOOZE = "snooze"
 SERVICE_SKIP = "skip"
+SERVICE_CREATE_ALARM = "create_alarm"
+SERVICE_DELETE_ALARM = "delete_alarm"
+SERVICE_CREATE_COMMAND = "create_command"
+SERVICE_DELETE_COMMAND = "delete_command"
 
 ATTR_DEVICE_NAME = "device_name"
 
@@ -92,6 +96,79 @@ SCHEMA_TRIGGER_ALERT = vol.Schema(
 SCHEMA_SIMPLE = vol.Schema(
     {
         vol.Optional(ATTR_DEVICE_NAME): cv.string,
+    }
+)
+
+# create_alarm mirrors update_alarm's field set, minus "index" (the app assigns
+# one) and plus "ephemeral". Only "time" is required — everything else falls back
+# to the user's defaults on the phone, which is what the app does for a manually
+# created alarm too.
+SCHEMA_CREATE_ALARM = vol.Schema(
+    {
+        vol.Optional(ATTR_DEVICE_NAME): cv.string,
+        vol.Required("time"): cv.string,
+        vol.Optional("label"): cv.string,
+        vol.Optional("name"): cv.string,
+        vol.Optional("enabled"): cv.boolean,
+        vol.Optional("days"): cv.string,
+        vol.Optional("sound"): cv.string,
+        vol.Optional("volume"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        vol.Optional("vibrate"): cv.boolean,
+        vol.Optional("fade_in"): vol.All(vol.Coerce(int), vol.Range(min=0, max=60)),
+        vol.Optional("mission"): cv.string,
+        vol.Optional("mission_config"): dict,
+        vol.Optional("missions"): vol.All(cv.ensure_list, vol.Length(min=0, max=5)),
+        vol.Optional("snooze_duration"): vol.All(vol.Coerce(int), vol.Range(min=1, max=60)),
+        vol.Optional("max_snooze_count"): vol.All(vol.Coerce(int), vol.Range(min=0, max=99)),
+        vol.Optional("snooze_mode"): cv.string,
+        vol.Optional("skip_mode"): cv.string,
+        vol.Optional("snooze_hold_duration"): vol.Coerce(float),
+        vol.Optional("skip_hold_duration"): vol.Coerce(float),
+        vol.Optional("notes"): cv.string,
+        vol.Optional("alarm_screen_commands"): vol.All(cv.ensure_list, vol.Length(min=0, max=4)),
+        vol.Optional("morning_weather"): cv.boolean,
+        vol.Optional("dismiss_app_uri"): cv.string,
+        vol.Optional("snooze_app_uri"): cv.string,
+        vol.Optional("swipe_left_command"): cv.string,
+        vol.Optional("swipe_right_command"): cv.string,
+        vol.Optional("radio_station"): cv.string,
+        # One-shot alarm: deleted by the app after it fires. Gets no per-alarm
+        # MQTT entities (index 0), so nothing to clean up in HA either.
+        vol.Optional("ephemeral"): cv.boolean,
+        vol.Optional("mqtt_id"): cv.string,
+    }
+)
+
+# The app accepts EITHER index or name here. Enforcing "exactly one" in the
+# schema gives a clear error in the UI instead of a silent no-op on the phone.
+SCHEMA_DELETE_ALARM = vol.Schema(
+    vol.All(
+        {
+            vol.Optional(ATTR_DEVICE_NAME): cv.string,
+            vol.Optional("index"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+            vol.Optional("name"): cv.string,
+        },
+        cv.has_at_least_one_key("index", "name"),
+    )
+)
+
+SCHEMA_CREATE_COMMAND = vol.Schema(
+    {
+        vol.Optional(ATTR_DEVICE_NAME): cv.string,
+        vol.Required("name"): cv.string,
+        vol.Optional("icon"): cv.string,
+        vol.Optional("color"): cv.string,
+        vol.Optional("color_r"): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+        vol.Optional("color_g"): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+        vol.Optional("color_b"): vol.All(vol.Coerce(int), vol.Range(min=0, max=255)),
+        vol.Optional("arm_action"): cv.string,
+    }
+)
+
+SCHEMA_DELETE_COMMAND = vol.Schema(
+    {
+        vol.Optional(ATTR_DEVICE_NAME): cv.string,
+        vol.Required("name"): cv.string,
     }
 )
 
@@ -172,6 +249,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: AllariseConfigEntry) ->
             SERVICE_DISMISS,
             SERVICE_SNOOZE,
             SERVICE_SKIP,
+            SERVICE_CREATE_ALARM,
+            SERVICE_DELETE_ALARM,
+            SERVICE_CREATE_COMMAND,
+            SERVICE_DELETE_COMMAND,
         ):
             hass.services.async_remove(DOMAIN, service)
 
@@ -230,8 +311,40 @@ def _register_services(hass: HomeAssistant) -> None:
             return
         await coordinator.async_publish_command("skip")
 
+    async def handle_create_alarm(call: ServiceCall) -> None:
+        coordinator = _find_coordinator(hass, call.data.get(ATTR_DEVICE_NAME))
+        if coordinator is None:
+            _LOGGER.error("Device not found: %s", call.data.get(ATTR_DEVICE_NAME))
+            return
+        await coordinator.async_publish_command("create_alarm", _build_payload(call))
+
+    async def handle_delete_alarm(call: ServiceCall) -> None:
+        coordinator = _find_coordinator(hass, call.data.get(ATTR_DEVICE_NAME))
+        if coordinator is None:
+            _LOGGER.error("Device not found: %s", call.data.get(ATTR_DEVICE_NAME))
+            return
+        await coordinator.async_publish_command("delete_alarm", _build_payload(call))
+
+    async def handle_create_command(call: ServiceCall) -> None:
+        coordinator = _find_coordinator(hass, call.data.get(ATTR_DEVICE_NAME))
+        if coordinator is None:
+            _LOGGER.error("Device not found: %s", call.data.get(ATTR_DEVICE_NAME))
+            return
+        await coordinator.async_publish_command("create_command", _build_payload(call))
+
+    async def handle_delete_command(call: ServiceCall) -> None:
+        coordinator = _find_coordinator(hass, call.data.get(ATTR_DEVICE_NAME))
+        if coordinator is None:
+            _LOGGER.error("Device not found: %s", call.data.get(ATTR_DEVICE_NAME))
+            return
+        await coordinator.async_publish_command("delete_command", _build_payload(call))
+
     hass.services.async_register(DOMAIN, SERVICE_UPDATE_ALARM, handle_update_alarm, schema=SCHEMA_UPDATE_ALARM)
     hass.services.async_register(DOMAIN, SERVICE_TRIGGER_ALERT, handle_trigger_alert, schema=SCHEMA_TRIGGER_ALERT)
     hass.services.async_register(DOMAIN, SERVICE_DISMISS, handle_dismiss, schema=SCHEMA_SIMPLE)
     hass.services.async_register(DOMAIN, SERVICE_SNOOZE, handle_snooze, schema=SCHEMA_SIMPLE)
     hass.services.async_register(DOMAIN, SERVICE_SKIP, handle_skip, schema=SCHEMA_SIMPLE)
+    hass.services.async_register(DOMAIN, SERVICE_CREATE_ALARM, handle_create_alarm, schema=SCHEMA_CREATE_ALARM)
+    hass.services.async_register(DOMAIN, SERVICE_DELETE_ALARM, handle_delete_alarm, schema=SCHEMA_DELETE_ALARM)
+    hass.services.async_register(DOMAIN, SERVICE_CREATE_COMMAND, handle_create_command, schema=SCHEMA_CREATE_COMMAND)
+    hass.services.async_register(DOMAIN, SERVICE_DELETE_COMMAND, handle_delete_command, schema=SCHEMA_DELETE_COMMAND)

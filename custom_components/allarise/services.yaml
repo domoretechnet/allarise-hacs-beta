@@ -259,3 +259,244 @@ skip:
       selector:
         text:
 
+
+create_alarm:
+  name: Create alarm
+  description: >-
+    Create a new alarm on the phone. Only the time is required; anything omitted
+    uses the phone's own defaults, exactly as if the alarm had been created by
+    hand. The app assigns the MQTT alarm ID.
+  fields:
+    device_name:
+      name: Device
+      description: Which Allarise device. Omit when only one is configured.
+      required: false
+      selector:
+        text:
+    time:
+      name: Time
+      description: 24-hour time, HH:mm.
+      required: true
+      example: "07:30"
+      selector:
+        time:
+    label:
+      name: Label
+      description: Alarm name shown in the app and used for the Home Assistant device name.
+      required: false
+      example: Weekday Wake
+      selector:
+        text:
+    enabled:
+      name: Enabled
+      description: Defaults to on.
+      required: false
+      selector:
+        boolean:
+    days:
+      name: Days
+      description: >-
+        Comma-separated weekday numbers, 1=Sunday to 7=Saturday. Omit for a
+        one-time alarm.
+      required: false
+      example: "2,3,4,5,6"
+      selector:
+        text:
+    sound:
+      name: Sound
+      description: Alarm tone ID. This is also the fallback when a radio station cannot be reached.
+      required: false
+      selector:
+        text:
+    volume:
+      name: Volume
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+    vibrate:
+      name: Vibrate
+      required: false
+      selector:
+        boolean:
+    fade_in:
+      name: Fade in
+      description: Minutes to ramp the volume over. 0 disables.
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: min
+    mission:
+      name: Mission
+      description: Wake-up challenge that must be completed to dismiss.
+      required: false
+      selector:
+        select:
+          options:
+            - none
+            - shake
+            - math
+            - balance_ball
+            - block_drop
+            - meteor
+            - home_assistant
+            - alert
+    mission_config:
+      name: Mission config
+      description: Per-mission settings, e.g. difficulty.
+      required: false
+      selector:
+        object:
+    missions:
+      name: Missions
+      description: Ordered sequence of up to 5 missions. Overrides the single Mission field.
+      required: false
+      selector:
+        object:
+    snooze_duration:
+      name: Snooze interval
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 60
+          unit_of_measurement: min
+    max_snooze_count:
+      name: Snooze limit
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 99
+    notes:
+      name: Notes
+      description: Text shown on the After-Alarm notes page.
+      required: false
+      selector:
+        text:
+          multiline: true
+    morning_weather:
+      name: Morning weather
+      description: Show the weather card after this alarm is dismissed.
+      required: false
+      selector:
+        boolean:
+    radio_station:
+      name: Radio station
+      description: >-
+        A favourited station's name or UUID. Requires App Persistence on the
+        phone — without it the alarm rings with its tone instead.
+      required: false
+      selector:
+        text:
+    ephemeral:
+      name: One-shot
+      description: >-
+        Delete the alarm after it fires. One-shot alarms get no per-alarm Home
+        Assistant entities.
+      required: false
+      selector:
+        boolean:
+
+delete_alarm:
+  name: Delete alarm
+  description: >-
+    Delete an alarm from the phone. Target it by MQTT alarm ID or by name —
+    provide exactly one.
+  fields:
+    device_name:
+      name: Device
+      description: Which Allarise device. Omit when only one is configured.
+      required: false
+      selector:
+        text:
+    index:
+      name: Alarm ID
+      description: The MQTT alarm ID, as shown on the per-alarm device.
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+    name:
+      name: Name
+      description: Alarm label, case-insensitive. Use instead of Alarm ID.
+      required: false
+      example: Weekday Wake
+      selector:
+        text:
+
+create_command:
+  name: Create command
+  description: >-
+    Create or update a custom command button on the phone. Creating a command
+    that already exists updates it in place.
+  fields:
+    device_name:
+      name: Device
+      description: Which Allarise device. Omit when only one is configured.
+      required: false
+      selector:
+        text:
+    name:
+      name: Name
+      description: Command name. Also the key used to update or delete it later.
+      required: true
+      example: Kitchen Lights
+      selector:
+        text:
+    icon:
+      name: Icon
+      description: SF Symbol name.
+      required: false
+      example: lightbulb.fill
+      selector:
+        text:
+    color_r:
+      name: "Colour: red"
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+    color_g:
+      name: "Colour: green"
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+    color_b:
+      name: "Colour: blue"
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 255
+    arm_action:
+      name: Arm action
+      description: Zone arm behaviour this command triggers.
+      required: false
+      selector:
+        text:
+
+delete_command:
+  name: Delete command
+  description: Delete a custom command button from the phone, by name.
+  fields:
+    device_name:
+      name: Device
+      description: Which Allarise device. Omit when only one is configured.
+      required: false
+      selector:
+        text:
+    name:
+      name: Name
+      required: true
+      example: Kitchen Lights
+      selector:
+        text:
