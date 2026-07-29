@@ -31,6 +31,7 @@ from .const import (
     TOPIC_COMMAND,
     TOPIC_HA_STATUS,
 )
+from .normalize import clean_options, clean_state_payload
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,9 +92,19 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._per_alarm_states: dict[int, dict[str, str]] = {}
         self._active_alarms: set[int] = set()
         self._app_online = False
+        # True once the availability (LWT) topic has delivered any value this
+        # session. While False, data messages may infer "online"; once True,
+        # the LWT is authoritative and inference must not override an explicit
+        # "offline" — the App Persistence switch's availability depends on it.
+        self._availability_seen = False
         # Sleep sound inventory — published by the app as a JSON array of MQTT names
         self._available_sleep_sounds: list[str] = []
         self._available_radio_stations: list[str] = []
+        # Alarm tone inventory — the same JSON-array shape as sleep sounds, and
+        # deliberately NOT a dashboard sensor: the bundled tones plus whatever
+        # the user imported pass Home Assistant's 255-character state limit
+        # quickly, and a truncated list is worse than no entity at all.
+        self._available_alarm_sounds: list[str] = []
         # Zone arm states — keyed by zone_slug, auto-discovered from MQTT topics
         self._zone_arm_states: dict[str, bool] = {}
         self._known_zones: set[str] = set()
@@ -252,6 +263,38 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Return the set of discovered zone slugs."""
         return set(self._known_zones)
 
+    @property
+    def known_commands(self) -> list[str]:
+        """Return the command names discovered on ``command/+/status``, sorted.
+
+        A command only appears here once the app has published a status for it,
+        which is the same condition that gives it a Home Assistant sensor. Used
+        to fill the command dropdowns in the service UI, so it must never be
+        treated as authoritative: the services still accept any string, because
+        a command created seconds ago on the phone is real long before its
+        status topic has been seen here.
+        """
+        return sorted(self._known_commands)
+
+    @property
+    def known_alarm_indices(self) -> list[int]:
+        """Return the MQTT alarm indexes this device has published, ascending."""
+        return sorted(self._known_alarm_indices)
+
+    def get_alarm_choices(self) -> list[tuple[int, str]]:
+        """Return (index, name) for every known alarm, ascending by index.
+
+        The name falls back to the index-derived label the per-alarm device
+        uses before ``alarm/{n}/name`` arrives, so an entry is never blank.
+        """
+        choices: list[tuple[int, str]] = []
+        for index in self.known_alarm_indices:
+            name = self.get_per_alarm_state(index, "name")
+            if name in ("Unknown", "", "None"):
+                name = f"Alarm {index}"
+            choices.append((index, name))
+        return choices
+
     async def async_remove_zone(self, zone_slug: str) -> None:
         """Remove an alarm zone permanently.
 
@@ -402,6 +445,15 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def get_per_alarm_state(self, alarm_index: int, key: str) -> str:
         """Get a per-alarm sensor state."""
+        # "alarm_id" is the one per-alarm value that does not come over MQTT.
+        # It is the index in the topic this alarm's data arrived on, which is
+        # exactly what update_alarm and delete_alarm target, so it is answered
+        # from the topic rather than waiting for the app to publish a number it
+        # has no reason to send. Deliberately ahead of the stored state: the
+        # topic is authoritative even if some future app build publishes a key
+        # by this name.
+        if key == "alarm_id":
+            return str(alarm_index)
         alarm_states = self._per_alarm_states.get(alarm_index, {})
         default = "Unknown"
         for sensor_key, _, _, sensor_default in PER_ALARM_SENSORS:
@@ -466,6 +518,16 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         back to a static list in that case.
         """
         return list(self._available_sleep_sounds)
+
+    def get_available_alarm_sounds(self) -> list[str]:
+        """Return the alarm tone names the app has advertised.
+
+        Empty on any app build that does not publish
+        ``sensor/alarm_sounds_available`` yet, which is the version skew that
+        matters here — a caller must fall back to free text rather than
+        assuming the list is authoritative and rejecting a name.
+        """
+        return list(self._available_alarm_sounds)
 
     # ─── MQTT publish helper ──────────────────────────────────────────
 
@@ -542,7 +604,15 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         publishes sensor/dashboard/alarm data the connection is clearly live.
         This handles the case where the availability retained message is missing
         or was not delivered before data messages started arriving.
+
+        Once the availability topic HAS spoken, it is authoritative: a retained
+        "offline" LWT must not be overridden by a stray data message (e.g. a
+        retained sensor replayed after a broker restart, or a message published
+        while the broker still holds offline). Otherwise the App Persistence
+        switch reports on/available for an app that cannot respond.
         """
+        if self._availability_seen:
+            return
         if not self._app_online:
             _LOGGER.info(
                 "Allarise: inferred app online from data message for %s",
@@ -557,6 +627,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(payload, bytes):
             payload = payload.decode("utf-8", errors="replace")
         was_online = self._app_online
+        self._availability_seen = True
         self._app_online = payload == "online"
         if self._app_online != was_online:
             _LOGGER.info(
@@ -597,7 +668,28 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.warning("Invalid sleep_sounds_available payload: %s", payload)
                 return
             if isinstance(parsed, list):
-                self._available_sleep_sounds = [str(s) for s in parsed]
+                self._available_sleep_sounds = clean_options([str(s) for s in parsed])
+                self.async_set_updated_data(self._dashboard_states)
+            return
+
+        # Alarm tone inventory — same JSON-array shape as sleep sounds, and
+        # handled the same way: stored for callers, never written into
+        # _dashboard_states. A sensor would have to hold the whole list as its
+        # state, and Home Assistant caps a state at 255 characters — the list
+        # passes that at roughly twenty tones, so the entity would silently
+        # start reporting a truncated inventory. The accessor is the API.
+        if key == "alarm_sounds_available":
+            try:
+                parsed = json.loads(payload) if payload else []
+            except json.JSONDecodeError:
+                _LOGGER.warning("Invalid alarm_sounds_available payload: %s", payload)
+                return
+            if isinstance(parsed, list):
+                # Case matters for a tone: the app resolves `sound` to a file
+                # name by ID, so folding "Alarm_Clock" and "alarm_clock" would
+                # hide one of them with no way to pick it. Same reasoning as
+                # sleep sounds, opposite of radio stations.
+                self._available_alarm_sounds = clean_options([str(s) for s in parsed])
                 self.async_set_updated_data(self._dashboard_states)
             return
 
@@ -615,7 +707,17 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.warning("Invalid radio_stations_available payload: %s", payload)
                 return
             if isinstance(parsed, list):
-                self._available_radio_stations = [str(s) for s in parsed]
+                # Station names come from an open directory, not from us, and
+                # arrive with trailing spaces, embedded newlines, zero-width
+                # joiners and the occasional 300-character title. Cleaning and
+                # de-duplicating here is what stops the dropdown showing two
+                # identical rows (only one of which the phone can resolve) or a
+                # blank row that silently does nothing when picked. Newer app
+                # builds clean before publishing too; this handles the older
+                # ones, which is the version skew that actually happens.
+                self._available_radio_stations = clean_options(
+                    [str(s) for s in parsed], ignore_case=True
+                )
                 self._dashboard_states[key] = json.dumps(self._available_radio_stations)
                 self.async_set_updated_data(self._dashboard_states)
             return
@@ -642,7 +744,13 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
         # ─────────────────────────────────────────────────────────────────
 
-        self._dashboard_states[key] = payload
+        # Cleaned on the way in, not on the way out, so everything that reads
+        # coordinator state sees the same string: the Radio Station select
+        # compares `current_option` against its own cleaned options, and a raw
+        # value here would leave the dropdown showing "none" while a station was
+        # plainly playing. Length is NOT capped here — the sensors do that, and
+        # the full text stays available as an attribute.
+        self._dashboard_states[key] = clean_state_payload(key, payload)
         self.async_set_updated_data(self._dashboard_states)
 
     @callback
@@ -778,7 +886,10 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return
             if alarm_index not in self._per_alarm_states:
                 self._per_alarm_states[alarm_index] = {}
-            self._per_alarm_states[alarm_index][key] = payload
+            # `notes` keeps its line breaks — an after-alarm note is meant to
+            # have them, and `append_notes` builds one up over several calls.
+            # Every other per-alarm value is single-line.
+            self._per_alarm_states[alarm_index][key] = clean_state_payload(key, payload)
 
             # If this alarm's mission turns out to be "alert", remove any
             # per-alarm HA entities that were created before the mission data arrived.

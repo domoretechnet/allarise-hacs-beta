@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -15,8 +17,14 @@ from homeassistant.util import dt as dt_util
 
 _MINUTES_UNTIL_REFRESH = timedelta(minutes=1)
 
-from .const import DASHBOARD_SENSORS, DOMAIN, PER_ALARM_SENSORS
+from .const import (
+    DASHBOARD_SENSORS,
+    DIAGNOSTIC_PER_ALARM_SENSORS,
+    DOMAIN,
+    PER_ALARM_SENSORS,
+)
 from .coordinator import AllariseCoordinator, CommandEntityFactory
+from .normalize import MAX_STATE_LENGTH, truncate_state
 
 _FIRE_TIME_DASHBOARD_KEYS = frozenset({
     "active_alarm_fire_time",
@@ -32,6 +40,23 @@ _FIRE_TIME_PER_ALARM_KEYS = frozenset({
 # Payloads the app sends when there is no time to report. A timestamp sensor
 # must be None (→ "unknown") in that case, not the literal string.
 _NO_VALUE = frozenset({"none", "unknown", "unavailable", ""})
+
+
+def _length_attributes(raw: str | None) -> dict[str, str] | None:
+    """Expose the untruncated text when a state had to be shortened.
+
+    Home Assistant will not accept a state longer than 255 characters — it
+    raises, logs a traceback and parks the entity on "unknown". Two of our
+    values pass that routinely: an after-alarm note built up over several
+    `append_notes` calls, and the JSON list of favourited radio stations, which
+    crosses 255 characters at roughly six favourites. The state is truncated so
+    the entity keeps working; the whole thing lives here so a template that
+    needs the real text can still reach it via
+    `state_attr('sensor.…', 'full_value')`.
+    """
+    if not isinstance(raw, str) or len(raw) <= MAX_STATE_LENGTH:
+        return None
+    return {"full_value": raw}
 
 
 def _as_timestamp(raw: str | None) -> "datetime | None":
@@ -149,14 +174,15 @@ class AllariseDashboardSensor(CoordinatorEntity[AllariseCoordinator], SensorEnti
         raw = self.coordinator.get_dashboard_state(self._key)
         if self._key in _FIRE_TIME_DASHBOARD_KEYS:
             return _as_timestamp(raw)
-        return raw
+        return truncate_state(raw)
 
     @property
-    def extra_state_attributes(self) -> dict[str, int] | None:
-        """Expose minutes_until for fire-time sensors."""
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose minutes_until for fire-time sensors, full_value for long ones."""
+        raw = self.coordinator.get_dashboard_state(self._key)
         if self._key not in _FIRE_TIME_DASHBOARD_KEYS:
-            return None
-        minutes = _minutes_until(self.coordinator.get_dashboard_state(self._key))
+            return _length_attributes(raw)
+        minutes = _minutes_until(raw)
         if minutes is None:
             return None
         return {"minutes_until": minutes}
@@ -213,6 +239,10 @@ class AllarisePerAlarmSensor(CoordinatorEntity[AllariseCoordinator], SensorEntit
         # trigger target this entity with an offset.
         if key in _FIRE_TIME_PER_ALARM_KEYS:
             self._attr_device_class = SensorDeviceClass.TIMESTAMP
+        # Alarm ID describes the wiring, not the alarm — Home Assistant files it
+        # under Diagnostic so it is findable without crowding the main list.
+        if key in DIAGNOSTIC_PER_ALARM_SENSORS:
+            self._attr_entity_category = EntityCategory.DIAGNOSTIC
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -243,16 +273,18 @@ class AllarisePerAlarmSensor(CoordinatorEntity[AllariseCoordinator], SensorEntit
         raw = self.coordinator.get_per_alarm_state(self._alarm_index, self._key)
         if self._key in _FIRE_TIME_PER_ALARM_KEYS:
             return _as_timestamp(raw)
-        return raw
+        # `notes` is the one that actually hits the 255-character wall; before
+        # this, an alarm whose Notes page had a paragraph on it reported
+        # "unknown" and logged a traceback on every republish.
+        return truncate_state(raw)
 
     @property
-    def extra_state_attributes(self) -> dict[str, int] | None:
-        """Expose minutes_until for fire-time sensors."""
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Expose minutes_until for fire-time sensors, full_value for long ones."""
+        raw = self.coordinator.get_per_alarm_state(self._alarm_index, self._key)
         if self._key not in _FIRE_TIME_PER_ALARM_KEYS:
-            return None
-        minutes = _minutes_until(
-            self.coordinator.get_per_alarm_state(self._alarm_index, self._key)
-        )
+            return _length_attributes(raw)
+        minutes = _minutes_until(raw)
         if minutes is None:
             return None
         return {"minutes_until": minutes}

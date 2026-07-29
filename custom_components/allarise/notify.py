@@ -20,6 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import AllariseCoordinator
+from .normalize import clean_service_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,10 +36,17 @@ async def async_setup_entry(
 
 
 class AllariseNotify(CoordinatorEntity[AllariseCoordinator], NotifyEntity):
-    """Notify entity for sending alerts to Allarise."""
+    """Notify entity for sending alerts to Allarise.
+
+    Named "Send Alert" rather than "Notify": what it does is trigger a
+    full-screen alert on the phone, and "Notify — Unknown" on the Notifiers
+    card read like something was broken. It is not — a notify entity's state is
+    the time it last sent, so it is `unknown` until the first alert goes out.
+    Display only; the entity_id and unique_id are unchanged.
+    """
 
     _attr_has_entity_name = True
-    _attr_name = "Notify"
+    _attr_name = "Send Alert"
     _attr_icon = "mdi:bell-ring"
 
     def __init__(self, coordinator: AllariseCoordinator) -> None:
@@ -92,6 +100,13 @@ class AllariseNotify(CoordinatorEntity[AllariseCoordinator], NotifyEntity):
                 payload["volume"] = int(vol_str)
             except (ValueError, TypeError):
                 pass  # Let the app fall back to its own default
+
+        # Same normalisation the trigger_alert service applies — notify is the
+        # other door into the identical `alert` command, and a message assembled
+        # by a template is if anything MORE likely to arrive with trailing
+        # newlines than one typed by hand. Done before the media resolve so a
+        # URL with a stray newline still resolves.
+        payload = clean_service_data(payload)
 
         # Sign media_url so the phone can fetch HA-hosted content
         # (e.g. TTS proxy URLs) without a Bearer token.

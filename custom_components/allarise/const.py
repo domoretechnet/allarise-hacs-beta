@@ -84,6 +84,16 @@ DASHBOARD_SENSORS = [
     ("broker_connection", "Broker Connection", "mdi:server-network", "Unknown"),
     ("app_version", "App Version", "mdi:cellphone-arrow-down", "Unknown"),
     ("media_alert_volume", "Alert Volume", "mdi:volume-medium", "75"),
+    # App Persistence — the app's background audio keep-alive setting, mirrored
+    # here so a dashboard can see it and the switch entity can act on it.
+    #
+    # The default is deliberately NOT "on" or "off". An app that predates this
+    # topic never publishes it, and a switch that confidently reported "off" for
+    # such a phone would be worse than one that reports nothing: someone would
+    # believe their radio alarms were about to ring their tone. "Unknown" is a
+    # value neither the sensor nor the switch will present as fact — the switch
+    # goes unavailable on it.
+    ("app_persistence", "App Persistence", "mdi:bolt-circle", "Unknown"),
     # ── Alert Configuration ────────────────────────────────────────────
     ("alert_sound", "Alert Sound", "mdi:bell-alert", "Default"),
     ("alert_vibrate", "Alert Vibrate", "mdi:vibrate", "on"),
@@ -117,6 +127,15 @@ DASHBOARD_SENSORS = [
 
 # Per-alarm sensor definitions: (key, name_suffix, icon, default_value)
 PER_ALARM_SENSORS = [
+    # The alarm's MQTT index — the number in every one of this device's entity
+    # ids, and the value update_alarm/delete_alarm target. It has no MQTT topic
+    # of its own: the coordinator answers it from the topic the alarm arrived
+    # on, so it is right from the first message and the app never has to
+    # publish anything new for it. Before this existed the only way to find the
+    # number was to read it out of an entity_id or open the alarm's edit screen
+    # on the phone, which is what both service descriptions had to tell people
+    # to do.
+    ("alarm_id", "Alarm ID", "mdi:identifier", "Unknown"),
     ("name", "Name", "mdi:label", "Unknown"),
     ("enabled", "Enabled", "mdi:alarm-check", "off"),
     ("state", "State", "mdi:bell-ring", "idle"),
@@ -167,6 +186,11 @@ PER_ALARM_SENSORS = [
     # Notes page buttons.
 ]
 
+# Per-alarm sensors that describe the plumbing rather than the alarm. Home
+# Assistant files these under Diagnostic on the device page, which keeps them
+# out of the way without hiding them.
+DIAGNOSTIC_PER_ALARM_SENSORS = frozenset({"alarm_id"})
+
 # Dashboard button definitions: (key, name_suffix, icon)
 DASHBOARD_BUTTONS = [
     ("dismiss", "Dismiss Alarm", "mdi:alarm-off"),
@@ -175,12 +199,17 @@ DASHBOARD_BUTTONS = [
     ("unskip", "Unskip Alarm", "mdi:skip-previous"),
     ("delete_next_alarm", "Delete Next Alarm", "mdi:delete-forever"),
     ("kill_snoozed", "Kill Snoozed Alarm", "mdi:alarm-off"),
-    ("sleep_sound_stop", "Sleep Sound Stop", "mdi:stop"),
-    ("sleep_sound_pause", "Sleep Sound Pause", "mdi:pause"),
-    ("sleep_sound_resume", "Sleep Sound Resume", "mdi:play"),
-    ("radio_stop", "Radio Stop", "mdi:stop"),
-    ("radio_pause", "Radio Pause", "mdi:pause"),
-    ("radio_resume", "Radio Resume", "mdi:play"),
+    # The sleep-sound and radio controls drive ONE audio channel on the phone —
+    # starting radio stops a sleep sound and vice versa — and the device page
+    # gave no hint of that, listing eight unrelated-looking rows. The shared
+    # "Audio:" prefix is display only: the keys, unique_ids and existing
+    # entity_ids are untouched, so every dashboard and automation keeps working.
+    ("sleep_sound_stop", "Audio: Sleep Sound Stop", "mdi:stop"),
+    ("sleep_sound_pause", "Audio: Sleep Sound Pause", "mdi:pause"),
+    ("sleep_sound_resume", "Audio: Sleep Sound Resume", "mdi:play"),
+    ("radio_stop", "Audio: Radio Stop", "mdi:stop"),
+    ("radio_pause", "Audio: Radio Pause", "mdi:pause"),
+    ("radio_resume", "Audio: Radio Resume", "mdi:play"),
 ]
 
 # Quick alarm button definitions: (key, name_suffix, icon)
