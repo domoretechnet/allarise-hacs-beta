@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
@@ -40,6 +41,22 @@ _FIRE_TIME_PER_ALARM_KEYS = frozenset({
 # Payloads the app sends when there is no time to report. A timestamp sensor
 # must be None (→ "unknown") in that case, not the literal string.
 _NO_VALUE = frozenset({"none", "unknown", "unavailable", ""})
+
+
+# States that carry no information. Restoring one of these would mark the key
+# as "seen" and park the sensor on the coordinator's literal default ("Unknown"),
+# which is exactly what the availability split exists to prevent.
+_UNRESTORABLE_STATES = frozenset({"", "unknown", "unavailable"})
+
+
+def _restorable_state(state: Any) -> str | None:
+    """Return a restored HA state worth seeding the coordinator with, or None."""
+    if state is None:
+        return None
+    value = state.state
+    if not isinstance(value, str) or value.strip().lower() in _UNRESTORABLE_STATES:
+        return None
+    return value
 
 
 def _length_attributes(raw: str | None) -> dict[str, str] | None:
@@ -118,7 +135,9 @@ async def async_setup_entry(
     coordinator.register_command_entity_factory(_command_sensor_factory, async_add_entities)
 
 
-class AllariseDashboardSensor(CoordinatorEntity[AllariseCoordinator], SensorEntity):
+class AllariseDashboardSensor(
+    CoordinatorEntity[AllariseCoordinator], RestoreEntity, SensorEntity
+):
     """A dashboard sensor for Allarise."""
 
     _attr_has_entity_name = True
@@ -165,8 +184,20 @@ class AllariseDashboardSensor(CoordinatorEntity[AllariseCoordinator], SensorEnti
 
     @property
     def available(self) -> bool:
-        """Return True if the app is online."""
-        return self.coordinator.app_online
+        """Return True once this sensor has ever had a value.
+
+        Deliberately NOT gated on app_online. A state sensor describes what the
+        alarm clock is configured to do, and that does not stop being true
+        because the phone suspended itself — under the Dynamic persistence mode
+        the app is offline most of the day, and gating on liveness turned the
+        whole integration unavailable between alarms. Liveness has its own
+        entity, binary_sensor.<device>_app_online, which is what an automation
+        should trigger on; action entities stay gated.
+
+        A sensor that has never received a message stays unavailable, so a fresh
+        install never shows the coordinator's literal "Unknown" default.
+        """
+        return self.coordinator.has_dashboard_data(self._key)
 
     @property
     def native_value(self) -> str | datetime | None:
@@ -188,8 +219,15 @@ class AllariseDashboardSensor(CoordinatorEntity[AllariseCoordinator], SensorEnti
         return {"minutes_until": minutes}
 
     async def async_added_to_hass(self) -> None:
-        """Register a 1-minute tick for fire-time sensors so minutes_until stays fresh."""
+        """Restore the last value, then tick fire-time sensors every minute."""
         await super().async_added_to_hass()
+        # Retained MQTT is the primary source and arrives during coordinator
+        # setup, before the platforms are forwarded — the coordinator ignores
+        # this seed when it already holds a value for the key, so a retained
+        # message always wins whichever order the two land in.
+        restored = _restorable_state(await self.async_get_last_state())
+        if restored is not None:
+            self.coordinator.restore_dashboard_state(self._key, restored)
         if self._key in _FIRE_TIME_DASHBOARD_KEYS:
             self.async_on_remove(
                 async_track_time_interval(
@@ -213,7 +251,9 @@ class AllariseDashboardSensor(CoordinatorEntity[AllariseCoordinator], SensorEnti
         self.async_write_ha_state()
 
 
-class AllarisePerAlarmSensor(CoordinatorEntity[AllariseCoordinator], SensorEntity):
+class AllarisePerAlarmSensor(
+    CoordinatorEntity[AllariseCoordinator], RestoreEntity, SensorEntity
+):
     """A per-alarm sensor — each alarm index gets its own HA device."""
 
     _attr_has_entity_name = True
@@ -261,10 +301,16 @@ class AllarisePerAlarmSensor(CoordinatorEntity[AllariseCoordinator], SensorEntit
 
     @property
     def available(self) -> bool:
-        """Return True if the app is online and the alarm exists."""
+        """Return True if the alarm still exists and this key has had a value.
+
+        The alarm-side twin of the dashboard sensor's rule: known rather than
+        live, so an alarm's name, fire time and days keep reading true while the
+        phone is suspended. A deleted alarm is never known, and a key that has
+        never arrived stays unavailable rather than reporting a default.
+        """
         return (
-            self.coordinator.app_online
-            and self.coordinator.is_alarm_active(self._alarm_index)
+            self.coordinator.is_alarm_known(self._alarm_index)
+            and self.coordinator.has_per_alarm_data(self._alarm_index, self._key)
         )
 
     @property
@@ -290,8 +336,16 @@ class AllarisePerAlarmSensor(CoordinatorEntity[AllariseCoordinator], SensorEntit
         return {"minutes_until": minutes}
 
     async def async_added_to_hass(self) -> None:
-        """Register a 1-minute tick for fire-time sensors so minutes_until stays fresh."""
+        """Restore the last value, then tick fire-time sensors every minute."""
         await super().async_added_to_hass()
+        # See the dashboard sensor's copy: retained MQTT wins, this only fills a
+        # gap. "alarm_id" is answered from the topic, so it is never restored.
+        if self._key != "alarm_id":
+            restored = _restorable_state(await self.async_get_last_state())
+            if restored is not None:
+                self.coordinator.restore_per_alarm_state(
+                    self._alarm_index, self._key, restored
+                )
         if self._key in _FIRE_TIME_PER_ALARM_KEYS:
             self.async_on_remove(
                 async_track_time_interval(

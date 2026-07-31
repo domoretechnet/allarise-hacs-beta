@@ -91,6 +91,21 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._dashboard_states: dict[str, str] = {}
         self._per_alarm_states: dict[int, dict[str, str]] = {}
         self._active_alarms: set[int] = set()
+        # Keys that have carried a real MQTT message (or a restored value) at
+        # least once. Separate from the state dicts because those are seeded
+        # with defaults at construction: a sensor that has never received data
+        # must read "unavailable", never the literal string "Unknown".
+        # This — not app_online — is what state sensors gate availability on,
+        # so last-known values survive the app going offline.
+        self._dashboard_seen: set[str] = set()
+        self._per_alarm_seen: dict[int, set[str]] = {}
+        # Alarm indexes whose retained alarm/{n}/availability = "online" arrived
+        # while the app itself was offline — the alarm exists on the broker but
+        # the phone is not live. Deliberately NOT _active_alarms: action
+        # entities must stay unavailable, and _active_alarms is cleared on the
+        # device going offline. Entities are only created for one of these once
+        # real data has arrived for it (see _handle_alarm_msg).
+        self._stale_known_alarms: set[int] = set()
         self._app_online = False
         # True once the availability (LWT) topic has delivered any value this
         # session. While False, data messages may infer "online"; once True,
@@ -401,11 +416,19 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         from the device, which triggers HA to cascade-remove the device and
         all its entities cleanly.
         """
-        if alarm_index not in self._known_alarm_indices:
+        if (
+            alarm_index not in self._known_alarm_indices
+            and alarm_index not in self._stale_known_alarms
+        ):
             return
         self._known_alarm_indices.discard(alarm_index)
+        # A stale-known alarm may never have earned entities, but its tombstone
+        # must still bury it: otherwise the next retained data message would
+        # register it all over again.
+        self._stale_known_alarms.discard(alarm_index)
         self._removed_alarm_indices.add(alarm_index)
         self._per_alarm_states.pop(alarm_index, None)
+        self._per_alarm_seen.pop(alarm_index, None)
 
         # Remove per-alarm button availability state
         self._per_alarm_dismiss_available.pop(alarm_index, None)
@@ -463,8 +486,75 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return alarm_states.get(key, default)
 
     def is_alarm_active(self, alarm_index: int) -> bool:
-        """Return whether an alarm index is active (exists)."""
+        """Return whether an alarm index is active (exists AND the app is live).
+
+        This is the liveness answer — action entities (buttons, switches,
+        selects, numbers) gate on it, because acting on an alarm requires a
+        phone that can hear us. State sensors use is_alarm_known instead.
+        """
         return alarm_index in self._active_alarms
+
+    def is_alarm_known(self, alarm_index: int) -> bool:
+        """Return whether an alarm exists as far as we know, live or not.
+
+        True for an active alarm, for one that already has entities, and for
+        one registered from retained data while the app was offline. False once
+        the alarm's tombstone has been seen — a deleted alarm never comes back
+        from retained data.
+        """
+        if alarm_index in self._removed_alarm_indices:
+            return False
+        return (
+            alarm_index in self._active_alarms
+            or alarm_index in self._known_alarm_indices
+            or alarm_index in self._stale_known_alarms
+        )
+
+    def has_dashboard_data(self, key: str) -> bool:
+        """Return whether a dashboard key has ever carried a real value."""
+        return key in self._dashboard_seen
+
+    def has_per_alarm_data(self, alarm_index: int, key: str) -> bool:
+        """Return whether a per-alarm key has ever carried a real value.
+
+        "alarm_id" has no topic — it is answered from the index in the topic
+        the alarm's data arrived on (see get_per_alarm_state), so it counts as
+        present as soon as anything at all has been received for that alarm.
+        """
+        seen = self._per_alarm_seen.get(alarm_index)
+        if not seen:
+            return False
+        if key == "alarm_id":
+            return True
+        return key in seen
+
+    def restore_dashboard_state(self, key: str, value: str) -> None:
+        """Seed a dashboard value from a Home Assistant restored state.
+
+        Belt and braces for the restart case where a retained message never
+        arrives (retain turned off on the phone, or a broker that lost its
+        store). Retained MQTT stays the primary source: this is a no-op once
+        the key has been seen, and a retained message that arrives afterwards
+        overwrites it the normal way.
+        """
+        if key in self._dashboard_seen:
+            return
+        self._dashboard_states[key] = value
+        self._dashboard_seen.add(key)
+
+    def restore_per_alarm_state(self, alarm_index: int, key: str, value: str) -> None:
+        """Seed a per-alarm value from a Home Assistant restored state.
+
+        Same rules as restore_dashboard_state, plus: a deleted alarm is never
+        restored, and a restored value alone does not make the alarm known —
+        the entity only exists because the alarm was known in the first place.
+        """
+        if alarm_index in self._removed_alarm_indices:
+            return
+        if key in self._per_alarm_seen.get(alarm_index, ()):
+            return
+        self._per_alarm_states.setdefault(alarm_index, {})[key] = value
+        self._per_alarm_seen.setdefault(alarm_index, set()).add(key)
 
     def is_dismiss_available(self, alarm_index: int | None = None) -> bool:
         """Return whether dismiss is available."""
@@ -719,6 +809,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     [str(s) for s in parsed], ignore_case=True
                 )
                 self._dashboard_states[key] = json.dumps(self._available_radio_stations)
+                self._dashboard_seen.add(key)
                 self.async_set_updated_data(self._dashboard_states)
             return
 
@@ -751,6 +842,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # plainly playing. Length is NOT capped here — the sensors do that, and
         # the full text stays available as an attribute.
         self._dashboard_states[key] = clean_state_payload(key, payload)
+        self._dashboard_seen.add(key)
         self.async_set_updated_data(self._dashboard_states)
 
     @callback
@@ -822,23 +914,41 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._active_alarms.discard(alarm_index)
                 self._remove_alarm_device(alarm_index)
             elif is_online:
-                # Only trust per-alarm availability when the app is confirmed
-                # online.  When the coordinator first subscribes, the broker
-                # delivers stale retained "online" messages for alarms that
-                # were deleted before the cleanup fix.  The device-level
-                # availability topic tells us the app is actually running;
-                # until that arrives, ignore per-alarm availability.
-                if not self._app_online:
-                    _LOGGER.debug(
-                        "Ignoring retained availability for alarm %d "
-                        "(app not online yet)",
-                        alarm_index,
-                    )
-                    return
                 # Skip alert-mission alarms entirely — no per-alarm HA entities.
                 if alarm_index in self._alert_alarm_indices:
                     return
+                if not self._app_online:
+                    # The app is not live, so this is retained data: the alarm
+                    # exists on the broker but nothing can act on it. Record it
+                    # as known-but-stale — NOT active — so the retained state
+                    # messages that follow are kept instead of dropped. This is
+                    # the HA-restart-while-the-phone-is-offline case; without it
+                    # the per-alarm devices came back empty even though the
+                    # broker held every value.
+                    #
+                    # A marker on its own earns nothing: entities are created in
+                    # the data branch below, once at least one real key has
+                    # arrived. That is what keeps a stale marker for an alarm
+                    # deleted while the phone was offline from resurrecting a
+                    # device full of "Unknown" (the app's own purge clears such
+                    # markers on its next connect).
+                    if alarm_index in self._removed_alarm_indices:
+                        return
+                    if alarm_index not in self._stale_known_alarms:
+                        self._stale_known_alarms.add(alarm_index)
+                        _LOGGER.info(
+                            "Alarm %d registered from retained data while the "
+                            "app is offline — awaiting its state before "
+                            "creating entities",
+                            alarm_index,
+                        )
+                    self._per_alarm_states.setdefault(alarm_index, {})
+                    self.async_set_updated_data(self._dashboard_states)
+                    return
                 self._active_alarms.add(alarm_index)
+                # Promoted from stale to live; entities it already has are kept
+                # (_create_entities_for_new_alarm is a no-op for a known index).
+                self._stale_known_alarms.discard(alarm_index)
                 if alarm_index not in self._per_alarm_states:
                     self._per_alarm_states[alarm_index] = {}
                 # Dynamically create entities for this alarm if new
@@ -876,13 +986,21 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         # Normal per-alarm sensor: alarm/{index}/{key}
-        # Only store data for alarms that are already active (availability=online).
-        # Stale retained MQTT data from deleted alarms is silently ignored.
+        # Stored for alarms that are active (availability=online with the app
+        # live) and for known-but-stale ones — an alarm whose retained
+        # availability arrived while the app was offline still has real values
+        # on the broker, and throwing them away is what left the per-alarm
+        # devices blank after an HA restart. Data for a deleted alarm is still
+        # silently ignored.
         if len(rest) == 1:
             key = rest[0]
             # Actual sensor data confirms the app is live (not stale availability).
             self._set_app_online_from_data()
-            if alarm_index not in self._active_alarms:
+            is_stale_known = (
+                alarm_index in self._stale_known_alarms
+                and alarm_index not in self._removed_alarm_indices
+            )
+            if alarm_index not in self._active_alarms and not is_stale_known:
                 return
             if alarm_index not in self._per_alarm_states:
                 self._per_alarm_states[alarm_index] = {}
@@ -890,6 +1008,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # have them, and `append_notes` builds one up over several calls.
             # Every other per-alarm value is single-line.
             self._per_alarm_states[alarm_index][key] = clean_state_payload(key, payload)
+            self._per_alarm_seen.setdefault(alarm_index, set()).add(key)
 
             # If this alarm's mission turns out to be "alert", remove any
             # per-alarm HA entities that were created before the mission data arrived.
@@ -903,6 +1022,13 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 self.async_set_updated_data(self._dashboard_states)
                 return
+
+            # Ghost-alarm guard: a known-but-stale alarm earns its entities here
+            # and nowhere else, now that at least one real key has arrived for
+            # it. Idempotent — an alarm that already has entities (including one
+            # later promoted to active) is not created twice.
+            if is_stale_known:
+                self._create_entities_for_new_alarm(alarm_index)
 
             self._sync_alarm_device_name(alarm_index)
             self.async_set_updated_data(self._dashboard_states)

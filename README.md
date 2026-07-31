@@ -166,16 +166,27 @@ service (or `create_alarm` over MQTT). Send `""` to clear it.
 
 ## ⚡ App Persistence (3.2.0)
 
-App Persistence is the app's background keep-alive. With it **on** the app stays
-resident: a radio alarm streams its actual station and MQTT keeps working while
-the app is in your pocket. With it **off** iOS suspends the app — alarms still
-ring on time, but a radio alarm plays its own tone instead of the station, and
-nothing on that phone answers MQTT until you open it. Off saves battery.
+App Persistence is the app's background keep-alive, and it has three settings:
+
+- **On** — the app stays resident: a radio alarm streams its actual station and
+  MQTT keeps working while the phone is in your pocket. Costs battery.
+- **Dynamic** — resident only while it is worth it: charging, or close to an
+  alarm. Suspended the rest of the time.
+- **Off** — never resident. Alarms still ring on time through AlarmKit, but a
+  radio alarm plays its own tone instead of the station, and nothing on that
+  phone answers MQTT until you open it. Best battery life.
 
 | Entity | Value |
 | --- | --- |
-| `switch.<device>_app_persistence` | Toggle it from a dashboard |
-| `sensor.<device>_app_persistence` | `on` / `off` — the app's current setting |
+| `select.<device>_app_persistence_mode` | `on` / `off` / `dynamic` — the setting the user chose |
+| `switch.<device>_app_persistence` | Whether the app is resident **right now** — toggling it turns persistence fully on or off |
+| `sensor.<device>_app_persistence` | `on` / `off` — the same "resident right now" value as the switch |
+
+**The select and the switch answer different questions**, which matters under
+Dynamic: the select stays on `dynamic` until somebody changes the setting, while
+the switch and sensor flip between `on` and `off` by themselves as the app
+becomes and stops being resident. Use the select to *set* the mode, the sensor
+to ask whether the app is reachable at this moment.
 
 **How you tell whether it worked.** There is no reply to the command. The app
 publishes its setting back on `sensor/app_persistence` (retained) on connect and
@@ -201,17 +212,42 @@ turning persistence *off* is what causes iOS to suspend the app, so once it is
 off there is nothing connected to receive the command that would turn it back
 on. Switching it on again has to happen on the phone.
 
-You can publish the command directly as well. `ON`/`OFF` and JSON both work:
+You can publish the command directly as well. `ON`, `OFF`, `DYNAMIC` and JSON all
+work, on the same command topic that has always existed:
 
 ```yaml
 action: mqtt.publish
 data:
   topic: "allarise/<device>/command/app_persistence"
-  payload: "ON"
+  payload: "DYNAMIC"
 ```
 
 Requires the newer app. An older app never publishes the topic, so the switch
-stays `unavailable` rather than showing a value it cannot back up.
+stays `unavailable` rather than showing a value it cannot back up, and it ignores
+a `DYNAMIC` payload it does not understand — republishing its unchanged setting
+rather than erroring. The `select` entity needs an app that publishes
+`sensor/app_persistence_mode`; until one does, it shows `unavailable` and never
+guesses a mode.
+
+## 🌙 Offline behavior (3.2.1)
+
+Under Dynamic persistence the app is suspended most of the day, so "offline" is
+the normal state between alarms — not a fault. What that means in Home
+Assistant:
+
+- **State sensors hold their last-known values.** Alarm names, fire times, days,
+  sounds, missions, enabled state and the dashboard sensors keep reporting what
+  the phone last published instead of flipping to `unavailable`. A sensor that
+  has never received a value is still `unavailable` — it never invents one.
+- **`binary_sensor.<device>_app_online` is the liveness signal.** Trigger on that
+  when you need to know whether the phone can be reached; do not infer it from a
+  sensor going unavailable.
+- **Action entities become unavailable while the app is offline.** Buttons,
+  switches, selects, numbers, the media player and notify all need a phone that
+  can hear the command, so they stay gated on liveness and come back on connect.
+- **After a Home Assistant restart with the app offline**, alarm devices and
+  their data are rebuilt from retained MQTT, so a restart at 2pm does not leave
+  you with empty alarms until the phone next wakes.
 
 ## 🧭 Service fields that fill themselves in
 
