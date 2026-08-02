@@ -23,7 +23,6 @@ async def async_setup_entry(
     async_add_entities([
         AllariseAlertVibrateSwitch(coordinator),
         AllariseAlertLoopMediaSwitch(coordinator),
-        AllariseAppPersistenceSwitch(coordinator),
     ])
 
     # Register factory for dynamic per-alarm switch creation
@@ -209,105 +208,13 @@ class AllariseAlertVibrateSwitch(CoordinatorEntity[AllariseCoordinator], SwitchE
         self.async_write_ha_state()
 
 
-class AllariseAppPersistenceSwitch(CoordinatorEntity[AllariseCoordinator], SwitchEntity):
-    """Switch for the app's App Persistence setting (background keep-alive).
-
-    App Persistence is what keeps the iOS app resident in the background. With
-    it on, a radio alarm streams its station and MQTT stays reachable. With it
-    off, iOS suspends the app: the alarm still rings on time but plays its own
-    tone instead of the station, and nothing on this device answers MQTT.
-
-    **The availability behaviour is the feature, not a caveat.** There is no
-    reply to the command topic — the app publishes its setting back on
-    ``sensor/app_persistence`` and that message is the receipt. Two things
-    therefore have to be true for this switch to claim it knows anything:
-
-    * the app is online (``availability``/LWT), and
-    * the app has actually published a value.
-
-    When either is false the switch reports ``unavailable``, which is the honest
-    answer to "did it change?" and the one the user asked for. It also spells out
-    the real limitation: once the app has been suspended — which is exactly what
-    turning persistence *off* causes — nothing is connected to receive the
-    command that would turn it back on. A switch that pretended otherwise would
-    be lying about the one case that matters.
-
-    Version skew, both directions:
-
-    * **Older app, this integration.** The topic is never published, the state
-      stays ``Unknown``, and the switch sits ``unavailable`` forever. It never
-      reports a wrong value, and it never reports "off" for a phone whose
-      persistence is on.
-    * **Newer app, older integration.** The app publishes a topic nobody
-      subscribes to. Harmless; nothing existing changes shape.
-    """
-
-    _attr_has_entity_name = True
-    _attr_name = "App Persistence"
-    _attr_icon = "mdi:bolt-circle"
-
-    def __init__(self, coordinator: AllariseCoordinator) -> None:
-        """Initialize the switch."""
-        super().__init__(coordinator)
-        self._attr_unique_id = (
-            f"allarise_{coordinator.device_name}_app_persistence_switch"
-        )
-
-    def _reported_state(self) -> str:
-        """Return the published value, lowercased, or "" when there isn't one.
-
-        The app publishes "on"/"off", but normalising here costs nothing and
-        means a future build (or a hand-published retained message) that sends
-        "ON" is not silently treated as unknown.
-        """
-        raw = self.coordinator.get_dashboard_state("app_persistence")
-        return str(raw).strip().lower()
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device info."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"allarise_{self.coordinator.device_name}_dashboard")},
-            name=f"Allarise {self.coordinator.device_name} - Dashboard",
-            manufacturer="Allarise",
-            model="iOS Alarm Clock",
-        )
-
-    @property
-    def available(self) -> bool:
-        """Return True only when the app is online AND has published a value."""
-        return self.coordinator.app_online and self._reported_state() in ("on", "off")
-
-    @property
-    def is_on(self) -> bool | None:
-        """Return the setting, or None when the app has not said.
-
-        Belt and braces with `available`: an integration reload can render an
-        entity before its first message arrives, and "unknown" is a truthful
-        state where a defaulted False would be an assertion we cannot back up.
-        """
-        state = self._reported_state()
-        if state not in ("on", "off"):
-            return None
-        return state == "on"
-
-    async def async_turn_on(self, **kwargs) -> None:
-        """Turn App Persistence on — publish the command and wait for the echo.
-
-        Optimistic state is deliberately NOT set. The whole point of this entity
-        is that Home Assistant learns whether the phone acted; showing "on"
-        immediately would destroy exactly the signal the user wanted.
-        """
-        await self.coordinator.async_publish_command("app_persistence", "ON")
-
-    async def async_turn_off(self, **kwargs) -> None:
-        """Turn App Persistence off — publish the command and wait for the echo."""
-        await self.coordinator.async_publish_command("app_persistence", "OFF")
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
-        self.async_write_ha_state()
+# NOTE: App Persistence used to be a switch here. It was removed because it
+# duplicated `select.<device>_app_persistence_mode` (whose "on"/"off" options
+# publish the exact same `command/app_persistence` payloads) while offering no
+# extra control. Persistence is now surfaced read-only as
+# `sensor.<device>_app_persistence` (status) and controlled by that select.
+# On upgrade the old `switch.<device>_app_persistence` entity becomes an
+# orphaned/restored entity in Home Assistant and can be deleted from the UI.
 
 
 class AllariseAlertLoopMediaSwitch(CoordinatorEntity[AllariseCoordinator], SwitchEntity):

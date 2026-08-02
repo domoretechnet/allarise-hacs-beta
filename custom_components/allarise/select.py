@@ -120,21 +120,20 @@ class AppPersistenceModeSelectEntity(SelectEntity):
       a radio alarm plays its own tone instead of the station and nothing on
       that phone answers MQTT until it is opened.
 
-    **This is not a second copy of the switch.** ``switch.<device>_app_persistence``
-    and ``sensor.<device>_app_persistence`` answer "is the app resident *right
-    now*", which under **dynamic** flips back and forth by itself all day. This
-    entity answers "which of the three modes did the user choose", which only
-    changes when somebody changes it. Both are useful and neither replaces the
-    other, so the switch is left exactly as it was — same unique_id, same topic,
-    same behaviour — and this is added alongside it.
+    **This is the control; the sensor is the status.** ``sensor.<device>_app_persistence``
+    answers "is the app resident *right now*", which under **dynamic** flips back
+    and forth by itself all day. This entity answers "which of the three modes did
+    the user choose", which only changes when somebody changes it. Both are useful
+    and neither replaces the other. (A separate on/off *switch* used to exist; it
+    was removed because this select's ``on``/``off`` options publish the identical
+    command, so it was pure duplication.)
 
-    Selecting an option publishes to the SAME command topic the switch uses
-    (``command/app_persistence``), because that is the topic the app has always
-    listened on; "DYNAMIC" is simply a third payload it now accepts. No new
-    command topic, so an automation that already publishes ``ON``/``OFF`` there
-    keeps working verbatim.
+    Selecting an option publishes to the command topic the app has always listened
+    on (``command/app_persistence``); "DYNAMIC" is simply a third payload it now
+    accepts. No new command topic, so an automation that already publishes
+    ``ON``/``OFF`` there keeps working verbatim.
 
-    Version skew, both directions — the same contract the switch documents:
+    Version skew, both directions:
 
     * **Older app, this integration.** ``sensor/app_persistence_mode`` is never
       published, ``get_dashboard_state`` answers "Unknown", and the dropdown
@@ -146,9 +145,9 @@ class AppPersistenceModeSelectEntity(SelectEntity):
     * **Newer app, older integration.** The app publishes a topic nobody
       subscribes to. Harmless; nothing existing changes shape.
 
-    No optimistic state, for the same reason as the switch: the published echo
-    is the receipt, and showing the requested value immediately would destroy
-    the one signal that says whether the phone actually acted.
+    No optimistic state: the published echo is the receipt, and showing the
+    requested value immediately would destroy the one signal that says whether
+    the phone actually acted.
     """
 
     _attr_has_entity_name = True

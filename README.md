@@ -178,15 +178,16 @@ App Persistence is the app's background keep-alive, and it has three settings:
 
 | Entity | Value |
 | --- | --- |
-| `select.<device>_app_persistence_mode` | `on` / `off` / `dynamic` — the setting the user chose |
-| `switch.<device>_app_persistence` | Whether the app is resident **right now** — toggling it turns persistence fully on or off |
-| `sensor.<device>_app_persistence` | `on` / `off` — the same "resident right now" value as the switch |
+| `select.<device>_app_persistence_mode` | `on` / `off` / `dynamic` — the setting the user chose (this is the control) |
+| `sensor.<device>_app_persistence` | `on` / `off` — whether the app is resident **right now** (read-only status) |
 
-**The select and the switch answer different questions**, which matters under
+**The select and the sensor answer different questions**, which matters under
 Dynamic: the select stays on `dynamic` until somebody changes the setting, while
-the switch and sensor flip between `on` and `off` by themselves as the app
-becomes and stops being resident. Use the select to *set* the mode, the sensor
-to ask whether the app is reachable at this moment.
+the sensor flips between `on` and `off` by itself as the app becomes and stops
+being resident. Use the select to *set* the mode, the sensor to ask whether the
+app is reachable at this moment. (There is no separate on/off switch — the
+select's `on`/`off` options publish the same command; pick `off` on the select to
+turn persistence off.)
 
 **How you tell whether it worked.** There is no reply to the command. The app
 publishes its setting back on `sensor/app_persistence` (retained) on connect and
@@ -194,9 +195,11 @@ on *every* change — including a command that asked for the value it already ha
 so an automation gets a definitive answer either way:
 
 ```yaml
-- action: switch.turn_on
+- action: select.select_option
   target:
-    entity_id: switch.bedroom_iphone_app_persistence
+    entity_id: select.bedroom_iphone_app_persistence_mode
+  data:
+    option: "on"
 - wait_template: "{{ is_state('sensor.bedroom_iphone_app_persistence', 'on') }}"
   timeout: "00:00:15"
   continue_on_timeout: true
@@ -331,7 +334,9 @@ entities:
         name: Stop
   - entity: sensor.bedroom_iphone_radio_state
     name: Now playing
-  - entity: switch.bedroom_iphone_app_persistence
+  - entity: select.bedroom_iphone_app_persistence_mode
+    name: App Persistence Mode
+  - entity: sensor.bedroom_iphone_app_persistence
     name: App Persistence
 footer:
   type: graph
