@@ -122,10 +122,13 @@ class AllariseMediaPlayer(CoordinatorEntity[AllariseCoordinator], MediaPlayerEnt
         media_id: str,
         **kwargs,
     ) -> None:
-        """Play media — sends an alert command with media_url to the phone.
+        """Play media — sends an alert command to the phone.
 
-        The iOS app will show a full-screen alert and play the audio.
-        Extra keys (title, message, sound, image_url) can be passed via `extra`.
+        The iOS app shows a full-screen alert. What the media becomes on that
+        alert depends on `media_type`: images render as a still, videos as an
+        inline player, and everything else (music, TTS, provider streams) plays
+        as audio. Extra keys (title, message, sound, image_url, video_url) can
+        be passed via `extra`.
 
         The volume is taken from the entity's current volume_level (set via
         media_player.volume_set) unless overridden in `extra`.
@@ -150,17 +153,36 @@ class AllariseMediaPlayer(CoordinatorEntity[AllariseCoordinator], MediaPlayerEnt
         media_id = async_process_play_media_url(self.hass, media_id)
         _LOGGER.debug("Resolved media URL: %s", media_id)
 
+        # Route the resolved URL by content type. Images and videos must reach
+        # the phone as image_url / video_url so the alert card renders them
+        # visually — the app's AlertContentView shows a still for image_url and
+        # an inline player for video_url. Only audio (music, TTS, provider
+        # streams) belongs in media_url, which the app plays through AVPlayer.
+        # Anything not clearly image/video stays audio, so TTS and every
+        # existing media_url automation behave exactly as before.
+        media_type_str = str(media_type or "").lower()
+        if media_type_str.startswith("image"):
+            media_key = "image_url"
+        elif media_type_str.startswith("video"):
+            media_key = "video_url"
+        else:
+            media_key = "media_url"
+
         payload: dict = {
             "message": extra.get("message", "Media playback"),
-            "media_url": media_id,
+            media_key: media_id,
         }
 
         if "title" in extra:
             payload["title"] = extra["title"]
         if "sound" in extra:
             payload["sound"] = extra["sound"]
+        # extra.image_url / extra.video_url let a caller attach a still or clip
+        # alongside audio in a single call; kept for backwards compatibility.
         if "image_url" in extra:
             payload["image_url"] = async_process_play_media_url(self.hass, extra["image_url"])
+        if "video_url" in extra:
+            payload["video_url"] = async_process_play_media_url(self.hass, extra["video_url"])
 
         # Volume: use explicit extra override, else the entity's volume_level.
         # Send as 0.0–1.0 float — the iOS app normalizes internally.
