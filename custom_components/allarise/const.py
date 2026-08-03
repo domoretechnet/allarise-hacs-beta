@@ -66,7 +66,7 @@ DASHBOARD_SENSORS = [
     ("alarm_sound", "Alarm Sound", "mdi:music-note", "Unknown"),
     ("alarm_volume", "Alarm Volume", "mdi:volume-high", "0%"),
     ("alarm_vibrate", "Alarm Vibrate", "mdi:vibrate", "off"),
-    ("alarm_fade_in", "Alarm Fade In", "mdi:sunrise", "Off"),
+    ("alarm_fade_in", "Alarm Fade In", "mdi:weather-sunset-up", "Off"),
     # ── Alarm Details ──────────────────────────────────────────────────
     # REMOVED in 3.0: "alarm_notes" and "active_alarm_widget_command_1..4".
     # The app's V1 alarm-screen notes widget is gone, so it stopped publishing
@@ -93,7 +93,7 @@ DASHBOARD_SENSORS = [
     # believe their radio alarms were about to ring their tone. "Unknown" is a
     # value neither the sensor nor the switch will present as fact — the switch
     # goes unavailable on it.
-    ("app_persistence", "App Persistence", "mdi:bolt-circle", "Unknown"),
+    ("app_persistence", "App Persistence", "mdi:flash-circle", "Unknown"),
     # ── Alert Configuration ────────────────────────────────────────────
     ("alert_sound", "Alert Sound", "mdi:bell-alert", "Default"),
     ("alert_vibrate", "Alert Vibrate", "mdi:vibrate", "on"),
@@ -158,7 +158,7 @@ PER_ALARM_SENSORS = [
     ("snoozes", "Snoozes", "mdi:sleep", "0"),
     ("volume", "Volume", "mdi:volume-high", "0%"),
     ("vibrate", "Vibrate", "mdi:vibrate", "off"),
-    ("fade_in", "Fade In", "mdi:sunrise", "Off"),
+    ("fade_in", "Fade In", "mdi:weather-sunset-up", "Off"),
     # Notes text and command-button names for the after-alarm Notes page.
     # Both publish the literal string "None" when empty (they used to publish an
     # empty string), and "commands" is comma-separated with NO space after the
