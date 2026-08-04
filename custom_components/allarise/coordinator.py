@@ -57,6 +57,22 @@ _ACTIVE_ALARM_SENSOR_KEYS = frozenset({
 })
 
 
+def _warn_non_list_inventory(topic: str, parsed: Any) -> None:
+    """Log an inventory payload that parsed as JSON but is not a list.
+
+    Valid JSON of the wrong shape used to fall through every branch: no update,
+    no warning, the previous list left in place. An app build publishing an
+    object or a bare number would degrade invisibly — the silent no-op this
+    project treats as worse than a rejection.
+    """
+    _LOGGER.warning(
+        "Inventory payload on %s is a %s, not a list — ignoring it and keeping "
+        "the previous list",
+        topic,
+        type(parsed).__name__,
+    )
+
+
 class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator for Allarise Alarm data — subscribes to MQTT topics."""
 
@@ -625,6 +641,24 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Publish a message to an MQTT topic."""
         await mqtt.async_publish(self.hass, topic, payload)
 
+    async def _async_publish_retained_arm_state(
+        self, zone_slug: str, armed: bool
+    ) -> None:
+        """Publish a zone's authoritative retained arm state, logging failures.
+
+        The republish paths schedule this as a background task, and a task that
+        raises loses its exception — a stuck arm state then has no explanation
+        anywhere. Publish semantics are unchanged; only the failure becomes
+        visible.
+        """
+        topic = f"{self.topic_prefix}/alarm/{zone_slug}/state"
+        try:
+            await mqtt.async_publish(
+                self.hass, topic, "ON" if armed else "OFF", retain=True
+            )
+        except Exception:  # noqa: BLE001 — background task, must not vanish
+            _LOGGER.exception("Failed to republish retained arm state to %s", topic)
+
     async def async_publish_command(self, cmd: str, payload: str = "") -> None:
         """Publish a dashboard command."""
         topic = self._topic(TOPIC_COMMAND, cmd=cmd)
@@ -760,6 +794,8 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if isinstance(parsed, list):
                 self._available_sleep_sounds = clean_options([str(s) for s in parsed])
                 self.async_set_updated_data(self._dashboard_states)
+            else:
+                _warn_non_list_inventory(msg.topic, parsed)
             return
 
         # Alarm tone inventory — same JSON-array shape as sleep sounds, and
@@ -781,6 +817,8 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # sleep sounds, opposite of radio stations.
                 self._available_alarm_sounds = clean_options([str(s) for s in parsed])
                 self.async_set_updated_data(self._dashboard_states)
+            else:
+                _warn_non_list_inventory(msg.topic, parsed)
             return
 
         # Radio favourites — published as a JSON array of station names, the
@@ -811,6 +849,8 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._dashboard_states[key] = json.dumps(self._available_radio_stations)
                 self._dashboard_seen.add(key)
                 self.async_set_updated_data(self._dashboard_states)
+            else:
+                _warn_non_list_inventory(msg.topic, parsed)
             return
 
         # ── Alert-mission suppression ────────────────────────────────────
@@ -1119,12 +1159,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Re-publish authoritative retained state so the app and any other
         # subscriber gets the confirmed value back immediately.
         self.hass.async_create_task(
-            mqtt.async_publish(
-                self.hass,
-                f"{self.topic_prefix}/alarm/{zone_slug}/state",
-                "ON" if armed else "OFF",
-                retain=True,
-            )
+            self._async_publish_retained_arm_state(zone_slug, armed)
         )
 
     @callback
@@ -1137,12 +1172,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         _LOGGER.debug("HA status: %s", msg.payload)
         for zone_slug, armed in self._zone_arm_states.items():
             self.hass.async_create_task(
-                mqtt.async_publish(
-                    self.hass,
-                    f"{self.topic_prefix}/alarm/{zone_slug}/state",
-                    "ON" if armed else "OFF",
-                    retain=True,
-                )
+                self._async_publish_retained_arm_state(zone_slug, armed)
             )
 
     # ─── DataUpdateCoordinator override ───────────────────────────────

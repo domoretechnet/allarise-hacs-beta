@@ -24,7 +24,7 @@ from .const import (
     DOMAIN,
     PER_ALARM_SENSORS,
 )
-from .coordinator import AllariseCoordinator, CommandEntityFactory
+from .coordinator import AllariseCoordinator
 from .normalize import MAX_STATE_LENGTH, truncate_state
 
 _FIRE_TIME_DASHBOARD_KEYS = frozenset({

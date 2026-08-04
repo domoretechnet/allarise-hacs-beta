@@ -15,7 +15,7 @@
 
 
 [![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
-[![HA Min Version](https://img.shields.io/badge/HA-2024.1%2B-blue.svg)](https://www.home-assistant.io)
+[![HA Min Version](https://img.shields.io/badge/HA-2024.11%2B-blue.svg)](https://www.home-assistant.io)
 
 Control and monitor the **Allarise Alarm** iOS app from Home Assistant. Dismiss alarms, snooze, send full-screen alerts to your phone, automate alarm schedules, and expose alarm state as sensors — all over MQTT.
 
@@ -25,6 +25,7 @@ Control and monitor the **Allarise Alarm** iOS app from Home Assistant. Dismiss 
 
 ## ✅ Requirements
 
+- Home Assistant **2024.11** or newer
 - The Allarise **TestFlight** build — join at <https://testflight.apple.com/join/DYTMR1v2>
 - A running MQTT broker (e.g. Mosquitto via the HA add-on)
 - The MQTT integration configured in Home Assistant
@@ -411,6 +412,40 @@ mission_config:
 Tap-as-fallback previously had no settings at all and was always a single tap;
 it now takes `fallback_tap_dismiss_mode`, `fallback_tap_count` and
 `fallback_tap_hold_duration`.
+
+## 🔒 Shared broker considerations
+
+Most topics this integration uses are namespaced per device
+(`{prefix}/{device-name}/…`), so two phones on the same broker never collide.
+
+**The zone arm topics are the deliberate exception.** They are shared:
+
+```
+{prefix}/alarm/{zone}/state     ← authoritative retained state, published by HA
+{prefix}/alarm/{zone}/set       ← arm request from any Allarise phone
+```
+
+They carry no device segment on purpose — a household's zones are shared
+property, so any phone can arm "front_door" and every phone and every Home
+Assistant sees the same state. That is the feature, and the topic shape is part
+of the published API: changing it would silently retarget existing automations,
+so it is not going to change.
+
+The consequence is worth knowing if your broker is **not** private to your
+household. Anyone publishing to `{prefix}/alarm/…` on the same prefix can create
+a zone switch in your Home Assistant and change a zone's armed state. On a
+shared, community or multi-tenant broker:
+
+- Give each household its **own topic prefix**, set identically in the app
+  (**Settings → MQTT Settings**) and in this integration.
+- Enforce it with **broker ACLs** so a client can only publish and subscribe
+  under its own prefix. In Mosquitto that is a `topic readwrite {prefix}/#`
+  rule per user, with no shared wildcard above it.
+- Use per-user broker credentials rather than one shared login, so the ACLs have
+  something to key on.
+
+On a broker that only your household uses — the normal case, including the
+Mosquitto add-on — there is nothing to do here.
 
 ## 🔗 Links
 

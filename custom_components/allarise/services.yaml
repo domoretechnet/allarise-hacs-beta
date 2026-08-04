@@ -461,6 +461,10 @@ trigger_alert:
       description: >-
         Overrides the phone's system volume for this alert, as a percentage.
         Alerts play through the speaker and ignore the mute switch.
+        0-100 is the scale every path uses on the wire, including
+        media_player.play_media and notify.send_message, which used to disagree.
+        The app still accepts a 0.0-1.0 fraction, so older automations keep
+        working.
       required: false
       selector:
         number:

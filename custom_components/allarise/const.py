@@ -14,24 +14,6 @@ DEFAULT_TOPIC_PREFIX = "allarise"
 # {prefix} = user-configured topic prefix (default "allarise")
 # {device}  = sanitised device name (lowercase, no special chars)
 
-# Availability
-TOPIC_AVAILABILITY = "{prefix}/{device}/availability"
-
-# Dashboard sensor state  →  {prefix}/{device}/sensor/{key}
-TOPIC_SENSOR = "{prefix}/{device}/sensor/{key}"
-
-# Dashboard button availability  →  {prefix}/{device}/dashboard/{key}
-TOPIC_DASHBOARD_AVAIL = "{prefix}/{device}/dashboard/{key}"
-
-# Per-alarm sensor state  →  {prefix}/{device}/alarm/{index}/{key}
-TOPIC_ALARM_SENSOR = "{prefix}/{device}/alarm/{index}/{key}"
-
-# Per-alarm availability
-TOPIC_ALARM_AVAILABILITY = "{prefix}/{device}/alarm/{index}/availability"
-
-# Per-alarm button availability  →  {prefix}/{device}/alarm/{index}/{key}
-TOPIC_ALARM_BUTTON_AVAIL = "{prefix}/{device}/alarm/{index}/{key}"
-
 # ─── Command topics (integration publishes TO these) ─────────────────
 TOPIC_COMMAND = "{prefix}/{device}/command/{cmd}"
 TOPIC_ALARM_COMMAND = "{prefix}/{device}/alarm/{index}/command/{cmd}"
@@ -232,7 +214,3 @@ PER_ALARM_BUTTONS = [
     ("kill_snoozed", "Kill Snoozed", "mdi:alarm-off"),
     ("delete", "Delete", "mdi:delete"),
 ]
-
-# Text entity definitions: (key, name_suffix, icon)
-# (currently empty — update_alarm removed)
-TEXT_ENTITIES: list = []

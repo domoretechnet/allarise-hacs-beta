@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -23,6 +24,41 @@ from .const import (
 )
 from .coordinator import AllariseCoordinator
 
+# Anything the MQTT layer cannot carry in a topic segment. A control character
+# is silently mangled rather than rejected by most brokers.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _validate_input(device_name: str, topic_prefix: str) -> dict[str, str]:
+    """Return per-field form errors for the values the user typed.
+
+    Both of these are load-bearing for every topic this integration touches, and
+    both fail *silently* when they are wrong: a name that sanitizes to nothing
+    yields ``allarise//sensor/#`` and a prefix carrying a wildcard subscribes to
+    something the app never publishes. The integration loads, no exception is
+    raised, and no data ever arrives. Catching it on the form is the only place
+    the user is looking.
+    """
+    errors: dict[str, str] = {}
+
+    # The coordinator sanitizes the name into a topic segment; if that leaves
+    # nothing, every topic collapses to an empty segment.
+    if not AllariseCoordinator.sanitize_device_name(device_name):
+        errors[CONF_DEVICE_NAME] = "invalid_device_name"
+
+    prefix = topic_prefix or ""
+    if (
+        not prefix.strip()
+        or "#" in prefix
+        or "+" in prefix
+        or prefix.startswith("/")
+        or prefix.endswith("/")
+        or _CONTROL_CHARS.search(prefix)
+    ):
+        errors[CONF_TOPIC_PREFIX] = "invalid_topic_prefix"
+
+    return errors
+
 
 class AllariseConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Allarise Alarm."""
@@ -39,14 +75,23 @@ class AllariseConfigFlow(ConfigFlow, domain=DOMAIN):
             device_name = user_input[CONF_DEVICE_NAME]
             topic_prefix = user_input.get(CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX)
 
-            # Check for duplicate device names
-            await self.async_set_unique_id(f"allarise_{device_name}")
-            self._abort_if_unique_id_configured()
+            errors = _validate_input(device_name, topic_prefix)
+
+            if not errors:
+                # Check for duplicate device names. New entries key on the
+                # SANITIZED name — that is the form the topics actually use, so
+                # "Bryan's iPhone" and "bryans-iphone" are the same device and
+                # must collide. Entries created before this change keep their
+                # raw unique_id untouched; nothing here migrates them.
+                sanitized = AllariseCoordinator.sanitize_device_name(device_name)
+                await self.async_set_unique_id(f"allarise_{sanitized}")
+                self._abort_if_unique_id_configured()
 
             # Validate MQTT is available
-            if not self.hass.config_entries.async_entries("mqtt"):
+            if not errors and not self.hass.config_entries.async_entries("mqtt"):
                 errors["base"] = "mqtt_not_configured"
-            else:
+
+            if not errors:
                 return self.async_create_entry(
                     title=f"Allarise - {device_name}",
                     data={
@@ -84,23 +129,30 @@ class AllariseConfigFlow(ConfigFlow, domain=DOMAIN):
             device_name = user_input[CONF_DEVICE_NAME]
             topic_prefix = user_input.get(CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX)
 
-            # Update unique_id; abort if a different entry already owns the new name
-            await self.async_set_unique_id(f"allarise_{device_name}")
-            self._abort_if_unique_id_configured(
-                updates={
-                    CONF_DEVICE_NAME: device_name,
-                    CONF_TOPIC_PREFIX: topic_prefix,
-                }
-            )
+            errors = _validate_input(device_name, topic_prefix)
 
-            return self.async_update_reload_and_abort(
-                entry,
-                title=f"Allarise - {device_name}",
-                data={
-                    CONF_DEVICE_NAME: device_name,
-                    CONF_TOPIC_PREFIX: topic_prefix,
-                },
-            )
+            if not errors:
+                # Update unique_id; abort if a different entry already owns the
+                # new name. Deliberately still the RAW name here: this entry
+                # already exists, and rewriting its unique_id to the sanitized
+                # form on an unrelated reconfigure is a silent identity change.
+                # Only newly created entries use the sanitized form.
+                await self.async_set_unique_id(f"allarise_{device_name}")
+                self._abort_if_unique_id_configured(
+                    updates={
+                        CONF_DEVICE_NAME: device_name,
+                        CONF_TOPIC_PREFIX: topic_prefix,
+                    }
+                )
+
+                return self.async_update_reload_and_abort(
+                    entry,
+                    title=f"Allarise - {device_name}",
+                    data={
+                        CONF_DEVICE_NAME: device_name,
+                        CONF_TOPIC_PREFIX: topic_prefix,
+                    },
+                )
 
         return self.async_show_form(
             step_id="reconfigure",

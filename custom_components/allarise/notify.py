@@ -9,9 +9,7 @@ from __future__ import annotations
 import json
 import logging
 
-from homeassistant.components import media_source
-from homeassistant.components.media_player import async_process_play_media_url
-from homeassistant.components.notify import NotifyEntity, NotifyEntityFeature
+from homeassistant.components.notify import NotifyEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -20,7 +18,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import AllariseCoordinator
-from .normalize import clean_service_data
+from .media import async_resolve_media_url
+from .normalize import clean_service_data, redact_url
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,8 +91,10 @@ class AllariseNotify(CoordinatorEntity[AllariseCoordinator], NotifyEntity):
                 payload[key] = data[key]
 
         # Default volume: use the app's configured Media Alert Volume if not specified.
-        # The sensor stores an integer 0–100; the app's normalizeVolume() handles both
-        # 0–100 integers and 0.0–1.0 floats, so we pass the raw integer.
+        # An integer 0–100 is the canonical wire scale for `alert.volume` — it is
+        # what the service schemas validate, what this sensor stores, and what
+        # MQTTCommandHandler.normalizeVolume documents as coming from HACS. The
+        # app still accepts a 0.0–1.0 float, so nothing already sending one breaks.
         if "volume" not in payload:
             vol_str = self.coordinator.get_dashboard_state("media_alert_volume")
             try:
@@ -108,17 +109,24 @@ class AllariseNotify(CoordinatorEntity[AllariseCoordinator], NotifyEntity):
         # URL with a stray newline still resolves.
         payload = clean_service_data(payload)
 
-        # Sign media_url so the phone can fetch HA-hosted content
-        # (e.g. TTS proxy URLs) without a Bearer token.
-        if "media_url" in payload:
-            url = payload["media_url"]
-            if media_source.is_media_source_id(url):
-                play_item = await media_source.async_resolve_media(
-                    self.hass, url, self.entity_id
+        # Resolve and sign every media reference so the phone can fetch
+        # HA-hosted content (e.g. TTS proxy URLs) without a Bearer token.
+        # image_url and video_url go through the same path as media_url —
+        # media_player.play_media already treats all three alike, and a
+        # media-source id is just as pasteable into one of them as the other.
+        # A field that will not resolve is dropped, not fatal: the alert still
+        # reaches the phone without it.
+        for key in ("media_url", "image_url", "video_url"):
+            if key in payload:
+                resolved = await async_resolve_media_url(
+                    self.hass, payload[key], self.entity_id
                 )
-                url = play_item.url
-            payload["media_url"] = async_process_play_media_url(self.hass, url)
-            _LOGGER.debug("Resolved media URL: %s", payload["media_url"])
+                if resolved is None:
+                    payload.pop(key)
+                else:
+                    payload[key] = resolved
+                    # Redacted: the signed URL carries an authSig credential.
+                    _LOGGER.debug("Resolved %s: %s", key, redact_url(resolved))
 
         await self.coordinator.async_publish_command(
             "alert", json.dumps(payload)

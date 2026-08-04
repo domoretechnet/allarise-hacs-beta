@@ -8,8 +8,6 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components import media_source
-from homeassistant.components.media_player import async_process_play_media_url
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 import homeassistant.helpers.config_validation as cv
@@ -22,6 +20,7 @@ from .const import (
     PLATFORMS,
 )
 from .coordinator import AllariseCoordinator
+from .media import async_resolve_media_url
 from .normalize import (
     clean_service_data,
     mission_difficulty_config,
@@ -536,8 +535,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: AllariseConfigEntry) ->
 
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
-    # Unregister services and frontend panel if no more entries
-    if not hass.config_entries.async_entries(DOMAIN):
+    # Unregister services and frontend panel if no more entries.
+    # The entry being unloaded is still in async_entries() at this point, so it
+    # has to be excluded — counting it meant the list was never empty and the
+    # services survived until a restart, still pointing at coordinators that no
+    # longer exist.
+    remaining = [
+        other
+        for other in hass.config_entries.async_entries(DOMAIN)
+        if other.entry_id != entry.entry_id
+    ]
+    if not remaining:
         for service in (
             SERVICE_UPDATE_ALARM,
             SERVICE_TRIGGER_ALERT,
@@ -578,15 +586,16 @@ def _register_services(hass: HomeAssistant) -> None:
         data = clean_service_data(
             {k: v for k, v in call.data.items() if k != ATTR_DEVICE_NAME}
         )
-        if "media_url" in data:
-            url = data["media_url"]
-            if media_source.is_media_source_id(url):
-                play_item = await media_source.async_resolve_media(hass, url, None)
-                url = play_item.url
-            data["media_url"] = async_process_play_media_url(hass, url)
-        for key in ("image_url", "video_url"):
+        # A media reference that will not resolve drops out of the payload with a
+        # warning; the alert itself still goes to the phone. Losing the audio is
+        # recoverable, losing the alert is not.
+        for key in ("media_url", "image_url", "video_url"):
             if key in data:
-                data[key] = async_process_play_media_url(hass, data[key])
+                resolved = await async_resolve_media_url(hass, data[key], None)
+                if resolved is None:
+                    data.pop(key)
+                else:
+                    data[key] = resolved
         payload = json.dumps(data)
         await coordinator.async_publish_command("alert", payload)
 

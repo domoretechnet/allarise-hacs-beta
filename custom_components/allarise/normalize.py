@@ -147,6 +147,20 @@ def clean_service_data(data: dict[str, Any]) -> dict[str, Any]:
     return {key: clean_field(key, value) for key, value in data.items()}
 
 
+def redact_url(url: Any) -> str:
+    """Return a URL safe to write to the log.
+
+    ``async_process_play_media_url`` signs local Home Assistant URLs with an
+    ``authSig`` query parameter, which is a bearer credential for that path —
+    logging it at DEBUG puts a working, fetchable token in a file users paste
+    into issue reports. The path is what anyone debugging actually needs, so the
+    query string is dropped and its presence noted instead.
+    """
+    text = str(url)
+    base, sep, _query = text.partition("?")
+    return f"{base}?<redacted>" if sep else base
+
+
 def clean_state_payload(key: str, payload: str) -> str:
     """Normalise a value the app published, on its way to becoming a state.
 

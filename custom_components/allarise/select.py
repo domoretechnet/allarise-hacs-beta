@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import logging
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
@@ -13,7 +12,6 @@ from .const import DOMAIN
 from .coordinator import AllariseCoordinator
 from .normalize import clean_options, clean_text
 
-_LOGGER = logging.getLogger(__name__)
 
 # Fallback list used until the iOS app publishes its full sleep sound inventory
 # (bundled + custom) on the retained sensor/sleep_sounds_available topic. After the

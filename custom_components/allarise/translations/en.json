@@ -27,7 +27,9 @@
       }
     },
     "error": {
-      "mqtt_not_configured": "MQTT integration is not configured. Please set up MQTT first."
+      "mqtt_not_configured": "MQTT integration is not configured. Please set up MQTT first.",
+      "invalid_device_name": "This device name contains no letters or numbers, so it cannot be used in an MQTT topic. Use the name shown in the Allarise app under Settings \u2192 MQTT Settings.",
+      "invalid_topic_prefix": "Invalid MQTT topic prefix. It cannot be empty, contain the wildcards # or +, or start or end with a slash."
     },
     "abort": {
       "already_configured": "A device with this name is already configured."

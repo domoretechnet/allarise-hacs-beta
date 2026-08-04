@@ -23,7 +23,6 @@ from homeassistant.components.media_player import (
     MediaPlayerEntityFeature,
     MediaPlayerState,
     MediaType,
-    async_process_play_media_url,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -33,8 +32,31 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import AllariseCoordinator
+from .media import async_resolve_media_url
+from .normalize import redact_url
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _volume_percent(value: float) -> int:
+    """Convert a volume to the canonical wire scale for `alert.volume`.
+
+    The two doors into the same app-side `alert` command disagreed: notify sent
+    an integer 0–100 (what every service schema validates) while this entity sent
+    a 0.0–1.0 float, so a value copied between them was off by 100×. An integer
+    0–100 wins because it is the documented HACS shape on the app side
+    (`MQTTCommandHandler.normalizeVolume`), and the app still accepts the float,
+    so nothing that already sends one breaks.
+
+    A value at or below 1.0 is read as a fraction, above it as a percentage —
+    the same rule the app applies, so both input shapes keep working here too.
+    The 1% floor is deliberate: the app reads a bare ``1`` as 100%, and an alarm
+    app must never turn "almost silent" into "full volume".
+    """
+    number = float(value)
+    percent = round(number * 100) if number <= 1.0 else round(number)
+    percent = max(0, min(100, percent))
+    return 2 if percent == 1 else percent
 
 
 async def async_setup_entry(
@@ -141,17 +163,16 @@ class AllariseMediaPlayer(CoordinatorEntity[AllariseCoordinator], MediaPlayerEnt
         """
         extra = kwargs.get("extra") or {}
 
-        # Resolve media-source:// URIs to actual paths
-        if media_source.is_media_source_id(media_id):
-            play_item = await media_source.async_resolve_media(
-                self.hass, media_id, self.entity_id
-            )
-            media_id = play_item.url
-
-        # Sign local HA URLs (adds authSig query param) and convert
-        # relative paths to absolute URLs so the phone can reach them.
-        media_id = async_process_play_media_url(self.hass, media_id)
-        _LOGGER.debug("Resolved media URL: %s", media_id)
+        # Resolve media-source:// URIs, sign local HA URLs (adds the authSig
+        # query param) and make relative paths absolute so the phone can reach
+        # them. A reference that will not resolve is dropped below rather than
+        # aborting the alert.
+        resolved_media = await async_resolve_media_url(
+            self.hass, media_id, self.entity_id
+        )
+        if resolved_media is not None:
+            # Redacted: the signed URL carries an authSig credential.
+            _LOGGER.debug("Resolved media URL: %s", redact_url(resolved_media))
 
         # Route the resolved URL by content type. Images and videos must reach
         # the phone as image_url / video_url so the alert card renders them
@@ -170,8 +191,9 @@ class AllariseMediaPlayer(CoordinatorEntity[AllariseCoordinator], MediaPlayerEnt
 
         payload: dict = {
             "message": extra.get("message", "Media playback"),
-            media_key: media_id,
         }
+        if resolved_media is not None:
+            payload[media_key] = resolved_media
 
         if "title" in extra:
             payload["title"] = extra["title"]
@@ -179,17 +201,21 @@ class AllariseMediaPlayer(CoordinatorEntity[AllariseCoordinator], MediaPlayerEnt
             payload["sound"] = extra["sound"]
         # extra.image_url / extra.video_url let a caller attach a still or clip
         # alongside audio in a single call; kept for backwards compatibility.
-        if "image_url" in extra:
-            payload["image_url"] = async_process_play_media_url(self.hass, extra["image_url"])
-        if "video_url" in extra:
-            payload["video_url"] = async_process_play_media_url(self.hass, extra["video_url"])
+        for key in ("image_url", "video_url"):
+            if key in extra:
+                resolved_extra = await async_resolve_media_url(
+                    self.hass, extra[key], self.entity_id
+                )
+                if resolved_extra is not None:
+                    payload[key] = resolved_extra
 
         # Volume: use explicit extra override, else the entity's volume_level.
-        # Send as 0.0–1.0 float — the iOS app normalizes internally.
+        # Sent as an integer 0–100 — see _volume_percent for why that is the
+        # canonical scale. Both 0.0–1.0 and 0–100 inputs are still accepted here.
         if "volume" in extra:
-            payload["volume"] = float(extra["volume"])
+            payload["volume"] = _volume_percent(extra["volume"])
         elif self._attr_volume_level is not None:
-            payload["volume"] = self._attr_volume_level
+            payload["volume"] = _volume_percent(self._attr_volume_level)
 
         await self.coordinator.async_publish_command(
             "alert", json.dumps(payload)
