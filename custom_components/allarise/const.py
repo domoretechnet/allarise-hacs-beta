@@ -62,6 +62,20 @@ DASHBOARD_SENSORS = [
     ("snoozes_remaining", "Snoozes Remaining", "mdi:sleep", "0"),
     # ── Alarm Counts ───────────────────────────────────────────────────
     ("enabled_alarm_count", "Alarm Count", "mdi:alarm-multiple", "0"),
+    # ── Sleep Insights ─────────────────────────────────────────────────
+    # How many of today's alarms the user slept through — an alarm that rang
+    # and was neither dismissed nor snoozed for at least 10 minutes. Alarms
+    # are counted, not rings; a late dismissal still counts on the day it
+    # rang; the count resets at the phone's local midnight. The app works out
+    # this figure itself and publishes it (retained, "0" sent explicitly), so
+    # it is right even if the app was never reopened after the alarm rang.
+    #
+    # The companion topic sensor/slept_through_today_details carries a small
+    # JSON list of which alarms — it is NOT a sensor of its own (a list of
+    # rows blows past Home Assistant's 255-character state limit the same way
+    # the radio favourites do). Instead the sensor exposes it as its "alarms"
+    # attribute; see AllariseDashboardSensor.extra_state_attributes.
+    ("slept_through_today", "Slept Through Today", "mdi:sleep", "0"),
     # ── App & Connection ───────────────────────────────────────────────
     ("broker_connection", "Broker Connection", "mdi:server-network", "Unknown"),
     ("app_version", "App Version", "mdi:cellphone-arrow-down", "Unknown"),

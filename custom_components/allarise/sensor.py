@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
@@ -36,6 +41,21 @@ _FIRE_TIME_PER_ALARM_KEYS = frozenset({
     "fire_time",
     "snooze_fire_time",
 })
+
+# The slept-through count is a running measurement (resets at local midnight),
+# so it carries state_class measurement — that is what makes it graphable in
+# Home Assistant's history and usable in a statistics card.
+_MEASUREMENT_DASHBOARD_KEYS = frozenset({
+    "slept_through_today",
+})
+
+# The count sensor's state comes from this topic; its detail list, from the
+# companion topic. The list is NOT its own entity — it rides along as the
+# count's "alarms" attribute (see extra_state_attributes). A list of rows
+# crosses Home Assistant's 255-character state cap the same way the radio
+# favourites do, so a second state sensor would silently truncate.
+_SLEPT_THROUGH_COUNT_KEY = "slept_through_today"
+_SLEPT_THROUGH_DETAILS_KEY = "slept_through_today_details"
 
 
 # Payloads the app sends when there is no time to report. A timestamp sensor
@@ -74,6 +94,50 @@ def _length_attributes(raw: str | None) -> dict[str, str] | None:
     if not isinstance(raw, str) or len(raw) <= MAX_STATE_LENGTH:
         return None
     return {"full_value": raw}
+
+
+def _slept_through_count(raw: str | None) -> int | None:
+    """Parse the slept-through count payload into an int, or None if unusable.
+
+    The app publishes a plain integer as a string ("0", "3"). A measurement
+    sensor wants a number, and returning the raw string would make Home
+    Assistant reject a stray non-numeric value with a traceback. Anything that
+    is not a clean integer degrades to None ("unknown") rather than raising —
+    an older app that never published this topic is the case that matters, and
+    the sensor's availability keeps it off the screen entirely until a real
+    value arrives.
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _slept_through_alarms(raw: str | None) -> list[dict[str, Any]] | None:
+    """Parse the slept-through details payload into a list of rows, or None.
+
+    The app publishes a JSON array like
+    ``[{"name": "Work", "index": 3, "at": "2026-08-05T06:00:00Z"}]`` (capped at
+    ten rows on the app side). Fail soft on absence and on damage: an older app
+    publishes nothing here, and a malformed or wrong-shaped payload must yield
+    no attribute rather than an exception. Only a JSON list of objects is
+    accepted; anything else is treated as "no detail available".
+    """
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, list):
+        return None
+    return [row for row in parsed if isinstance(row, dict)]
 
 
 def _as_timestamp(raw: str | None) -> "datetime | None":
@@ -171,6 +235,13 @@ class AllariseDashboardSensor(
         # template-sensor helper by hand.
         if key in _FIRE_TIME_DASHBOARD_KEYS:
             self._attr_device_class = SensorDeviceClass.TIMESTAMP
+        # A running daily count — measurement so Home Assistant graphs it and a
+        # statistics card can total it. No device_class: there is no unit that
+        # fits, and "alarms" is left off deliberately, matching the other count
+        # sensors on this device (snooze_count, enabled_alarm_count), none of
+        # which carry a unit.
+        if key in _MEASUREMENT_DASHBOARD_KEYS:
+            self._attr_state_class = SensorStateClass.MEASUREMENT
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -200,17 +271,40 @@ class AllariseDashboardSensor(
         return self.coordinator.has_dashboard_data(self._key)
 
     @property
-    def native_value(self) -> str | datetime | None:
+    def native_value(self) -> str | int | datetime | None:
         """Return the sensor value."""
         raw = self.coordinator.get_dashboard_state(self._key)
         if self._key in _FIRE_TIME_DASHBOARD_KEYS:
             return _as_timestamp(raw)
+        # The slept-through count is a measurement sensor, so its state must be
+        # a number — a non-numeric payload degrades to "unknown" rather than
+        # raising inside Home Assistant's recorder.
+        if self._key == _SLEPT_THROUGH_COUNT_KEY:
+            return _slept_through_count(raw)
         return truncate_state(raw)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Expose minutes_until for fire-time sensors, full_value for long ones."""
+        """Expose per-sensor attributes.
+
+        Fire-time sensors get minutes_until; the slept-through count carries an
+        "alarms" list drawn from its companion details topic; long text values
+        keep their untruncated form in full_value.
+        """
         raw = self.coordinator.get_dashboard_state(self._key)
+        if self._key == _SLEPT_THROUGH_COUNT_KEY:
+            # Fail soft: an older app never publishes the details topic, and a
+            # malformed payload must yield no attribute rather than an error.
+            # The details key has no registered default, so get_dashboard_state
+            # returns "Unknown" until the topic is seen — which parses to None
+            # and simply omits the attribute.
+            details_raw = self.coordinator.get_dashboard_state(
+                _SLEPT_THROUGH_DETAILS_KEY
+            )
+            alarms = _slept_through_alarms(details_raw)
+            if alarms is None:
+                return None
+            return {"alarms": alarms}
         if self._key not in _FIRE_TIME_DASHBOARD_KEYS:
             return _length_attributes(raw)
         minutes = _minutes_until(raw)
