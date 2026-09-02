@@ -8,7 +8,7 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall
 import homeassistant.helpers.config_validation as cv
 
@@ -46,6 +46,24 @@ type AllariseConfigEntry = ConfigEntry[AllariseCoordinator]
 # "days" has been advertised as a comma-separated string, is read by the app as
 # [Int], and is now produced by a weekday multi-select as a list of names. All
 # three arrive here; `normalize_days` converts whichever it is in the handler.
+def _volume_number(value: Any) -> int | float:
+    """Keep an integer volume an integer on the wire; let fractions through.
+
+    The app reads `volume` as a number and treats values <= 1.0 as a fraction
+    and > 1 as a percent, so `0.5` and `50` both mean half volume. The old
+    `vol.Coerce(int)` truncated `0.5` to `0` — mute — which is why this is a
+    float validator. Integer-valued input still publishes as `50`, not `50.0`,
+    so existing payloads are byte-identical to before.
+    """
+    number = float(value)
+    return int(number) if number.is_integer() else number
+
+
+# 0–100 percent, or a 0.0–1.0 fraction; anything outside 0–100 is rejected as
+# before.
+VOLUME_VALUE = vol.All(vol.Coerce(float), vol.Range(min=0, max=100), _volume_number)
+
+
 DAYS_VALUE = vol.Any(
     vol.Coerce(int),
     cv.string,
@@ -114,7 +132,7 @@ SCHEMA_UPDATE_ALARM = vol.Schema(
         vol.Optional("enabled"): cv.boolean,
         vol.Optional("days"): DAYS_VALUE,
         vol.Optional("sound"): cv.string,
-        vol.Optional("volume"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        vol.Optional("volume"): VOLUME_VALUE,
         vol.Optional("vibrate"): cv.boolean,
         vol.Optional("fade_in"): FADE_IN_MINUTES,
         vol.Optional("fade_in_duration"): vol.All(vol.Coerce(int), vol.Range(min=0, max=60)),
@@ -164,7 +182,7 @@ SCHEMA_UPDATE_ALARM = vol.Schema(
         vol.Optional("dismiss_app_uri"): cv.string,
         vol.Optional("snooze_app_uri"): cv.string,
         # A favourited station's name or UUID; "" clears the wake-up station.
-        vol.Optional("radio_station"): cv.string,
+        vol.Optional("radio_station"): vol.Any(cv.string, dict),
         vol.Optional("swipe_left_command"): cv.string,
         vol.Optional("swipe_right_command"): cv.string,
     }
@@ -179,7 +197,7 @@ SCHEMA_TRIGGER_ALERT = vol.Schema(
         # notification instead of stacking a second one beside it.
         vol.Optional("alert_id"): cv.string,
         vol.Optional("sound"): cv.string,
-        vol.Optional("volume"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        vol.Optional("volume"): VOLUME_VALUE,
         vol.Optional("play_sound"): cv.boolean,
         # Seconds, not minutes — this is the alert's own ramp, unrelated to an
         # alarm's fade_in. `true` selects the app's 30-second ramp.
@@ -210,7 +228,7 @@ SCHEMA_CREATE_ALARM = vol.Schema(
         vol.Optional("enabled"): cv.boolean,
         vol.Optional("days"): DAYS_VALUE,
         vol.Optional("sound"): cv.string,
-        vol.Optional("volume"): vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
+        vol.Optional("volume"): VOLUME_VALUE,
         vol.Optional("vibrate"): cv.boolean,
         vol.Optional("fade_in"): FADE_IN_MINUTES,
         vol.Optional("fade_in_duration"): vol.All(vol.Coerce(int), vol.Range(min=0, max=60)),
@@ -240,7 +258,7 @@ SCHEMA_CREATE_ALARM = vol.Schema(
         vol.Optional("snooze_app_uri"): cv.string,
         vol.Optional("swipe_left_command"): cv.string,
         vol.Optional("swipe_right_command"): cv.string,
-        vol.Optional("radio_station"): cv.string,
+        vol.Optional("radio_station"): vol.Any(cv.string, dict),
         # One-shot alarm: deleted by the app after it fires. Gets no per-alarm
         # MQTT entities (index 0), so nothing to clean up in HA either.
         vol.Optional("ephemeral"): cv.boolean,
@@ -303,7 +321,11 @@ def _find_coordinator(
     If device_name is None or empty, auto-resolves to the only configured
     entry when exactly one exists. Useful when only one Allarise device is set up.
     """
-    entries = hass.config_entries.async_entries(DOMAIN)
+    entries = [
+        e
+        for e in hass.config_entries.async_entries(DOMAIN)
+        if e.state is ConfigEntryState.LOADED
+    ]
     if not device_name:
         if len(entries) == 1:
             return entries[0].runtime_data
@@ -506,8 +528,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: AllariseConfigEntry) -> 
     # Start MQTT subscriptions
     await coordinator.async_setup()
 
-    # Set up platforms
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Set up platforms. If platform setup fails, roll back the MQTT
+    # subscriptions the coordinator just started so a failed setup does not
+    # leave a live listener pointing at a coordinator HA is about to discard.
+    try:
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except BaseException:
+        await coordinator.async_shutdown()
+        raise
 
     # Register custom services (once per domain)
     if not hass.services.has_service(DOMAIN, SERVICE_UPDATE_ALARM):
@@ -527,13 +555,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: AllariseConfigEntry) -> 
 async def async_unload_entry(hass: HomeAssistant, entry: AllariseConfigEntry) -> bool:
     """Unload a config entry."""
     coordinator: AllariseCoordinator = entry.runtime_data
-    # Before the coordinator goes: drop this device from the service pickers
-    # and stop listening to it, so a reload does not leave a stale listener
-    # pointing at a dead coordinator.
+
+    # Unload the platforms FIRST, while the coordinator is still alive. A
+    # platform's entities are torn down here, and they read coordinator state on
+    # the way out — shutting the coordinator down before this ran left the
+    # entities reaching into a half-dismantled coordinator. If the platforms
+    # will not unload, stop and keep everything as it was.
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unloaded:
+        return False
+
+    # Now the entities are gone: drop this device from the service pickers and
+    # stop listening to it, so a reload does not leave a stale listener pointing
+    # at a dead coordinator.
     await async_unregister_service_schemas(hass, entry)
     await coordinator.async_shutdown()
-
-    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     # Unregister services and frontend panel if no more entries.
     # The entry being unloaded is still in async_entries() at this point, so it
@@ -559,7 +595,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: AllariseConfigEntry) ->
         ):
             hass.services.async_remove(DOMAIN, service)
 
-    return unloaded
+    return True
 
 
 def _register_services(hass: HomeAssistant) -> None:

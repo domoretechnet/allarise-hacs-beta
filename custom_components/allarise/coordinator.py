@@ -31,7 +31,7 @@ from .const import (
     TOPIC_COMMAND,
     TOPIC_HA_STATUS,
 )
-from .normalize import clean_options, clean_state_payload
+from .normalize import MAX_STATE_LENGTH, clean_options, clean_state_payload
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -194,6 +194,23 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             device=self.device_name,
             **kwargs,
         )
+
+    def _relative_parts(self, topic: str) -> list[str] | None:
+        """Return the topic segments after this device's known base, or None.
+
+        The base is exactly what `self._topic` prepends to every template:
+        `{prefix}/{device}/`. Keying on the position of the literal "alarm" or
+        "command" segment instead breaks the moment a device is named "alarm",
+        or the prefix itself contains `/alarm/` or `/command/` — the wrong
+        segment is chosen and the topic is misparsed. Stripping the known base
+        and working on what follows it is immune to that. Returns None when the
+        topic does not start with our base, so the caller can fall back to the
+        old positional parsing and nothing that parsed before stops parsing.
+        """
+        base = f"{self.topic_prefix}/{self.device_name}/"
+        if not topic.startswith(base):
+            return None
+        return topic[len(base):].split("/")
 
     # ─── Dynamic entity registration ─────────────────────────────────
 
@@ -702,9 +719,18 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             (TOPIC_HA_STATUS, self._handle_ha_status_msg),
         ]
 
-        for topic, handler in subs:
-            unsub = await mqtt.async_subscribe(self.hass, topic, handler)
-            self._unsubs.append(unsub)
+        try:
+            for topic, handler in subs:
+                unsub = await mqtt.async_subscribe(self.hass, topic, handler)
+                self._unsubs.append(unsub)
+        except BaseException:
+            # A subscribe that fails part-way must not leave the earlier
+            # subscriptions dangling — call every unsub already collected, clear
+            # the list, and re-raise so setup fails cleanly.
+            for unsub in self._unsubs:
+                unsub()
+            self._unsubs.clear()
+            raise
 
         _LOGGER.info(
             "Allarise MQTT subscriptions active for %s (prefix: %s)",
@@ -721,13 +747,18 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # ─── MQTT message handlers ────────────────────────────────────────
 
-    def _set_app_online_from_data(self) -> None:
-        """Infer the app is online when any data message is received.
+    def _set_app_online_from_data(self, retained: bool = False) -> None:
+        """Infer the app is online when a LIVE data message is received.
 
         The explicit availability topic is the primary signal, but if the app
         publishes sensor/dashboard/alarm data the connection is clearly live.
         This handles the case where the availability retained message is missing
         or was not delivered before data messages started arriving.
+
+        A retained message says nothing about liveness — the broker replays it
+        to every new subscriber regardless of whether the app is connected — so
+        a retained data message must never flip the app to online. Callers pass
+        `msg.retain`; when it is True this returns immediately.
 
         Once the availability topic HAS spoken, it is authoritative: a retained
         "offline" LWT must not be overridden by a stray data message (e.g. a
@@ -735,6 +766,8 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         while the broker still holds offline). Otherwise the App Persistence
         switch reports on/available for an app that cannot respond.
         """
+        if retained:
+            return
         if self._availability_seen:
             return
         if not self._app_online:
@@ -775,7 +808,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(payload, bytes):
             payload = payload.decode("utf-8", errors="replace")
 
-        self._set_app_online_from_data()
+        self._set_app_online_from_data(msg.retain)
 
         # Extract sensor key from topic: …/sensor/{key}
         parts = msg.topic.split("/")
@@ -788,7 +821,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if key == "sleep_sounds_available":
             try:
                 parsed = json.loads(payload) if payload else []
-            except json.JSONDecodeError:
+            except (ValueError, TypeError, RecursionError):
                 _LOGGER.warning("Invalid sleep_sounds_available payload: %s", payload)
                 return
             if isinstance(parsed, list):
@@ -807,7 +840,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if key == "alarm_sounds_available":
             try:
                 parsed = json.loads(payload) if payload else []
-            except json.JSONDecodeError:
+            except (ValueError, TypeError, RecursionError):
                 _LOGGER.warning("Invalid alarm_sounds_available payload: %s", payload)
                 return
             if isinstance(parsed, list):
@@ -831,7 +864,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if key == "radio_stations_available":
             try:
                 parsed = json.loads(payload) if payload else []
-            except json.JSONDecodeError:
+            except (ValueError, TypeError, RecursionError):
                 _LOGGER.warning("Invalid radio_stations_available payload: %s", payload)
                 return
             if isinstance(parsed, list):
@@ -892,7 +925,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(payload, bytes):
             payload = payload.decode("utf-8", errors="replace")
 
-        self._set_app_online_from_data()
+        self._set_app_online_from_data(msg.retain)
 
         parts = msg.topic.split("/")
         key = parts[-1]  # e.g. "dismiss_availability"
@@ -926,17 +959,31 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Parse topic: {prefix}/{device}/alarm/{index}/...rest
         parts = msg.topic.split("/")
-        try:
-            alarm_idx_pos = parts.index("alarm") + 1
-            alarm_index = int(parts[alarm_idx_pos])
-        except (ValueError, IndexError):
-            return
+        rel = self._relative_parts(msg.topic)
+        if rel is not None:
+            # Base stripped: the remainder is alarm/{index}/...rest, immune to a
+            # device or prefix that happens to contain the word "alarm".
+            try:
+                if rel[0] != "alarm":
+                    return
+                alarm_index = int(rel[1])
+            except (ValueError, IndexError):
+                return
+            rest = rel[2:]
+        else:
+            # Fallback for any topic that does not start with our computed base:
+            # key on the literal "alarm" segment, exactly as before.
+            try:
+                alarm_idx_pos = parts.index("alarm") + 1
+                alarm_index = int(parts[alarm_idx_pos])
+            except (ValueError, IndexError):
+                return
+            rest = parts[alarm_idx_pos + 1:]
 
         if alarm_index < 1:
             return
 
         # Everything after the index
-        rest = parts[alarm_idx_pos + 1:]
         if not rest:
             return
 
@@ -985,6 +1032,21 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._per_alarm_states.setdefault(alarm_index, {})
                     self.async_set_updated_data(self._dashboard_states)
                     return
+                # The app is live and is telling us this index is online. If the
+                # index was tombstoned by an earlier deletion, the app has
+                # re-created it under the same number — lift the tombstone so the
+                # entity-creation path below runs, otherwise is_alarm_known would
+                # keep rejecting it and it would never come back. Only a LIVE,
+                # NON-retained "online" counts: the stale sub-branch above keeps
+                # its early return, and a retained "online" replayed by the
+                # broker while the app happens to be connected (broker restart,
+                # resubscribe) must not resurrect a deleted alarm either.
+                if alarm_index in self._removed_alarm_indices and not msg.retain:
+                    self._removed_alarm_indices.discard(alarm_index)
+                    _LOGGER.info(
+                        "Alarm %d re-created after deletion — lifting tombstone",
+                        alarm_index,
+                    )
                 self._active_alarms.add(alarm_index)
                 # Promoted from stale to live; entities it already has are kept
                 # (_create_entities_for_new_alarm is a no-op for a known index).
@@ -1035,7 +1097,7 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if len(rest) == 1:
             key = rest[0]
             # Actual sensor data confirms the app is live (not stale availability).
-            self._set_app_online_from_data()
+            self._set_app_online_from_data(msg.retain)
             is_stale_known = (
                 alarm_index in self._stale_known_alarms
                 and alarm_index not in self._removed_alarm_indices
@@ -1084,15 +1146,29 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if isinstance(payload, bytes):
             payload = payload.decode("utf-8", errors="replace")
         payload = payload.strip().lower()
+        # A Home Assistant state is capped at 255 chars; a longer command status
+        # would make the sensor's state write fail. Truncate but keep accepting
+        # any value the app sends.
+        payload = payload[:MAX_STATE_LENGTH]
 
         # Extract command name from topic: …/command/{name}/status
         parts = msg.topic.split("/")
         # Expect: prefix / device / command / {name} / status
-        try:
-            cmd_idx = parts.index("command") + 1
-            command_name = parts[cmd_idx]
-        except (ValueError, IndexError):
-            return
+        rel = self._relative_parts(msg.topic)
+        if rel is not None:
+            # Base stripped: the remainder is command/{name}/status, immune to a
+            # device or prefix that happens to contain the word "command".
+            if len(rel) < 2 or rel[0] != "command" or rel[-1] != "status":
+                return
+            command_name = rel[1]
+        else:
+            # Fallback for any topic that does not start with our computed base:
+            # key on the literal "command" segment, exactly as before.
+            try:
+                cmd_idx = parts.index("command") + 1
+                command_name = parts[cmd_idx]
+            except (ValueError, IndexError):
+                return
 
         if not command_name or command_name == "status":
             return
@@ -1167,9 +1243,18 @@ class AllariseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Handle homeassistant/status — HA just came online.
 
         Re-publish the retained arm state for every known zone so that any
-        iOS app instance that was connected before HA restarted re-syncs immediately.
+        iOS app instance that was connected before HA restarted re-syncs
+        immediately. Only "online" acts: HA also publishes "offline" on this
+        topic while shutting down, and starting publish tasks then would only
+        delay the shutdown.
         """
-        _LOGGER.debug("HA status: %s", msg.payload)
+        payload = msg.payload
+        if isinstance(payload, bytes):
+            payload = payload.decode("utf-8", errors="replace")
+        payload = str(payload).strip().lower()
+        _LOGGER.debug("HA status: %s", payload)
+        if payload != "online":
+            return
         for zone_slug, armed in self._zone_arm_states.items():
             self.hass.async_create_task(
                 self._async_publish_retained_arm_state(zone_slug, armed)

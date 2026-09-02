@@ -66,8 +66,9 @@ MULTILINE_FIELDS = frozenset({"notes", "append_notes", "message"})
 
 # Fields holding a URL. Trimmed and control-stripped, but never whitespace-
 # collapsed — mangling the inside of a URL is worse than leaving it alone.
+# `url` is the key inside a radio_station object ({"url": ..., "uuid": ..., "name": ...}).
 URL_FIELDS = frozenset(
-    {"media_url", "image_url", "video_url", "link_url", "dismiss_app_uri", "snooze_app_uri"}
+    {"media_url", "image_url", "video_url", "link_url", "dismiss_app_uri", "snooze_app_uri", "url"}
 )
 
 # Per-field length caps. Generous by design: the point is to stop an accident

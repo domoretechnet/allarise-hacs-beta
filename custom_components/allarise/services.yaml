@@ -150,7 +150,8 @@ update_alarm:
       name: Max snoozes
       description: >-
         How many times this alarm can be snoozed before it must be dismissed. 0
-        means snoozing is not allowed.
+        means unlimited snoozes (the app's meaning). To forbid snoozing set
+        `snooze_mode` to `disabled`.
       required: false
       selector:
         number:
@@ -377,7 +378,9 @@ update_alarm:
         spaces, so the value shown always resolves even when the station's own
         name has odd spacing in it. Requires App Persistence on the phone —
         without it the alarm rings with its tone instead. (For an arbitrary
-        stream URL, publish radio_station as an object via MQTT directly.)
+        stream URL, publish radio_station as an object via MQTT directly.) In
+        YAML you can also pass the object form here (`{url: ...}`) and it is
+        forwarded unchanged.
       required: false
       selector:
         text:
@@ -745,7 +748,8 @@ create_alarm:
       name: Max snoozes
       description: >-
         How many times this alarm can be snoozed before it must be dismissed. 0
-        means snoozing is not allowed.
+        means unlimited snoozes (the app's meaning). To forbid snoozing set
+        `snooze_mode` to `disabled`.
       required: false
       selector:
         number:
@@ -932,7 +936,8 @@ create_alarm:
         ignoring case and surrounding spaces. Requires App Persistence on the
         phone — without it the alarm rings with its tone instead. (For an
         arbitrary stream URL, publish radio_station as an object via MQTT
-        directly.)
+        directly.) In YAML you can also pass the object form here (`{url: ...}`)
+        and it is forwarded unchanged.
       required: false
       selector:
         text:

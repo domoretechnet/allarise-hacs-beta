@@ -84,6 +84,21 @@ class AllariseConfigFlow(ConfigFlow, domain=DOMAIN):
                 # must collide. Entries created before this change keep their
                 # raw unique_id untouched; nothing here migrates them.
                 sanitized = AllariseCoordinator.sanitize_device_name(device_name)
+                # A second entry pointing at the SAME sanitized name on the SAME
+                # topic_prefix is the same MQTT namespace — two coordinators
+                # would subscribe to identical topics and fight over the same
+                # entities. The unique_id check below catches most of it, but an
+                # older entry created before the sanitized-unique_id change keys
+                # on its raw name, so this compares the sanitized names directly.
+                for entry in self._async_current_entries():
+                    entry_prefix = entry.data.get(
+                        CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX
+                    )
+                    entry_sanitized = AllariseCoordinator.sanitize_device_name(
+                        entry.data.get(CONF_DEVICE_NAME, "")
+                    )
+                    if entry_sanitized == sanitized and entry_prefix == topic_prefix:
+                        return self.async_abort(reason="already_configured")
                 await self.async_set_unique_id(f"allarise_{sanitized}")
                 self._abort_if_unique_id_configured()
 
@@ -132,6 +147,22 @@ class AllariseConfigFlow(ConfigFlow, domain=DOMAIN):
             errors = _validate_input(device_name, topic_prefix)
 
             if not errors:
+                # Same-namespace guard as the user step, skipping this entry:
+                # reconfiguring one device onto another's sanitized name and
+                # topic_prefix would collide two coordinators on one namespace.
+                sanitized = AllariseCoordinator.sanitize_device_name(device_name)
+                for other in self._async_current_entries():
+                    if other.entry_id == entry.entry_id:
+                        continue
+                    other_prefix = other.data.get(
+                        CONF_TOPIC_PREFIX, DEFAULT_TOPIC_PREFIX
+                    )
+                    other_sanitized = AllariseCoordinator.sanitize_device_name(
+                        other.data.get(CONF_DEVICE_NAME, "")
+                    )
+                    if other_sanitized == sanitized and other_prefix == topic_prefix:
+                        return self.async_abort(reason="already_configured")
+
                 # Update unique_id; abort if a different entry already owns the
                 # new name. Deliberately still the RAW name here: this entry
                 # already exists, and rewriting its unique_id to the sanitized
