@@ -454,3 +454,7 @@ Mosquitto add-on — there is nothing to do here.
 - [Setup Guide & Documentation](https://beta.allarise.app/home-assistant.html)
 - [MQTT Payload Builder](https://beta.allarise.app/mqtt-builder.html)
 - [Report an issue](https://github.com/domoretechnet/allarise-hacs-beta/issues)
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE). The Allarise name and artwork are trademarks of DoMore Tech LLC and are not covered by the source license.
