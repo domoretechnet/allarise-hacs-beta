@@ -55,7 +55,7 @@ After installing, complete setup in four steps:
 
 > **Defaults:** Device Name = `iPhone` · Topic Prefix = `allarise`
 
-**[Full setup guide with MQTT configuration, ACL setup, entity reference, services, and example automations →](https://beta.allarise.app/home-assistant.html)**
+**[Full setup guide with MQTT configuration, entity reference, services, and example automations →](https://beta.allarise.app/home-assistant.html)**
 
 ## ⬆️ Upgrading to 3.0
 
